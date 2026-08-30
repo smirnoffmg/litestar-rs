@@ -31,8 +31,22 @@ connection hung by a failover.
 The plugin serves `QueueConfig.health_path` (`/health/queue` by default):
 
 ```json
-{"namespace": "lrs", "group": "workers", "queues": ["default"], "lag": 0}
+{
+  "namespace": "lrs",
+  "group": "workers",
+  "queues": ["default"],
+  "lag": 0,
+  "stats": {
+    "handled": 12, "failed": 1, "retried": 1, "buried": 0,
+    "unknown_task": 0, "reclaimed": 0, "skipped_duplicate": 2, "in_flight": 3
+  }
+}
 ```
+
+`stats` are this process's own counters, so a web process reports zeros — it
+runs no tasks. `unknown_task` is the one to watch during a rollout: a few are
+normal while two versions overlap, and a number that keeps climbing after the
+rollout finished means a task name was removed rather than renamed.
 
 `lag` is the consumer group's depth from `XINFO GROUPS`. Redis reports it as
 null when it cannot reconcile its counters after entries were deleted — and a

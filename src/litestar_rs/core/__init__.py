@@ -32,6 +32,7 @@ from litestar_rs.core.protocols import (
 from litestar_rs.core.results import RedisResultStore
 from litestar_rs.core.retry import RetryPolicy
 from litestar_rs.core.scheduler import RedisScheduler
+from litestar_rs.core.stats import WorkerStats
 from litestar_rs.core.testing import (
     CollectingEnqueuer,
     EagerEnqueuer,
@@ -71,6 +72,7 @@ __all__ = [
     "TaskResult",
     "UnknownTask",
     "WorkerConfig",
+    "WorkerStats",
     "current_enqueuer",
     "from_fields",
     "run",

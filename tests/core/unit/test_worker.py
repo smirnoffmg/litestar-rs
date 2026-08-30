@@ -20,6 +20,7 @@ from litestar_rs.core.envelope import (
 )
 from litestar_rs.core.errors import ConfigurationError
 from litestar_rs.core.retry import RetryPolicy
+from litestar_rs.core.stats import WorkerStats
 from litestar_rs.core.worker import (
     Slots,
     WorkerConfig,
@@ -28,6 +29,7 @@ from litestar_rs.core.worker import (
     _reclaim_loop,
     _run_one,
     _scheduler_loop,
+    _trim_loop,
     credits,
     run,
 )
@@ -316,6 +318,7 @@ async def test_successful_handler_acks_and_frees_the_slot() -> None:
         {},
         slots,
         WorkerConfig(),
+        WorkerStats(),
         record(b"1-0"),
     )
 
@@ -342,6 +345,7 @@ async def test_a_failing_task_is_rescheduled_with_backoff() -> None:
         {},
         slots,
         WorkerConfig(),
+        WorkerStats(),
         record(b"1-0"),
     )
 
@@ -367,7 +371,15 @@ async def test_a_task_out_of_attempts_is_buried() -> None:
 
     cfg = WorkerConfig(retry=RetryPolicy(max_attempts=3))
     await _run_one(
-        transport, scheduler, None, {"reindex": handler}, {}, slots, cfg, spent
+        transport,
+        scheduler,
+        None,
+        {"reindex": handler},
+        {},
+        slots,
+        cfg,
+        WorkerStats(),
+        spent,
     )
 
     [(entry_id, reason, detail)] = transport.buried
@@ -393,6 +405,7 @@ async def test_unknown_task_is_deferred_rather_than_acked_away() -> None:
         {},
         slots,
         WorkerConfig(),
+        WorkerStats(),
         record(b"1-0", task="from_the_future"),
     )
 
@@ -413,7 +426,7 @@ async def test_a_task_unknown_for_too_long_is_buried() -> None:
     stale.fields[b"enqueued_at"] = str(scheduler.now - 86_400_000).encode()
 
     cfg = WorkerConfig(retry=RetryPolicy(unknown_task_timeout_ms=3_600_000))
-    await _run_one(transport, scheduler, None, {}, {}, slots, cfg, stale)
+    await _run_one(transport, scheduler, None, {}, {}, slots, cfg, WorkerStats(), stale)
 
     [(_, reason, detail)] = transport.buried
     assert reason == "unknown_task"
@@ -456,6 +469,7 @@ async def test_a_handler_that_never_returns_keeps_being_refreshed() -> None:
                 {},
                 slots,
                 config,
+                WorkerStats(),
                 record(b"1-0"),
             )
 
@@ -488,6 +502,7 @@ async def test_reclaim_respects_credits_and_skips_what_it_cannot_run() -> None:
             WorkerConfig(concurrency=4),
             sleep,
             lambda rec: spawned.append(rec.entry_id),
+            WorkerStats(),
         )
 
     assert transport.pending_counts == [3]
@@ -548,7 +563,15 @@ async def test_an_undecodable_entry_is_buried_immediately() -> None:
     broken = Record(stream="s", entry_id=b"1-0", fields={b"v": b"1"})
 
     await _run_one(
-        transport, FakeScheduler(), None, {}, {}, slots, WorkerConfig(), broken
+        transport,
+        FakeScheduler(),
+        None,
+        {},
+        {},
+        slots,
+        WorkerConfig(),
+        WorkerStats(),
+        broken,
     )
 
     [(entry_id, reason, _)] = transport.buried
@@ -574,6 +597,7 @@ async def test_an_entry_delivered_too_often_is_buried_not_run() -> None:
             cfg,
             sleep,
             lambda rec: spawned.append(rec.entry_id),
+            WorkerStats(),
         )
 
     assert spawned == []
@@ -636,6 +660,7 @@ async def test_reclaim_never_takes_back_our_own_in_flight_entry() -> None:
             WorkerConfig(concurrency=4),
             sleep,
             lambda rec: spawned.append(rec.entry_id),
+            WorkerStats(),
         )
 
     assert spawned == []
@@ -661,6 +686,7 @@ async def test_we_never_reclaim_an_entry_redis_just_served_us() -> None:
             WorkerConfig(concurrency=4),
             sleep,
             lambda rec: spawned.append(rec.entry_id),
+            WorkerStats(),
         )
 
     assert spawned == []
@@ -683,6 +709,7 @@ async def test_entries_left_by_a_previous_run_are_taken_back() -> None:
             WorkerConfig(concurrency=4),
             sleep,
             lambda rec: spawned.append(rec.entry_id),
+            WorkerStats(),
         )
 
     assert spawned == [b"7-0"]
@@ -711,6 +738,7 @@ async def test_a_job_whose_dedup_key_is_taken_is_skipped_not_failed() -> None:
         {},
         slots,
         WorkerConfig(),
+        WorkerStats(),
         guarded,
     )
 
@@ -736,6 +764,7 @@ async def test_a_job_without_a_dedup_key_is_not_gated() -> None:
         {},
         slots,
         WorkerConfig(),
+        WorkerStats(),
         record(b"1-0"),
     )
 
@@ -779,6 +808,7 @@ async def test_a_result_is_kept_only_when_someone_asked_for_one() -> None:
         {},
         slots,
         WorkerConfig(),
+        WorkerStats(),
         record(b"1-0"),
     )
 
@@ -801,6 +831,7 @@ async def test_a_requested_result_is_kept_with_its_ttl() -> None:
         {},
         slots,
         WorkerConfig(),
+        WorkerStats(),
         wants_result(b"1-0", ttl_ms=1234),
     )
 
@@ -825,6 +856,7 @@ async def test_a_buried_job_records_its_failure_for_the_waiter() -> None:
         {},
         slots,
         cfg,
+        WorkerStats(),
         wants_result(b"1-0"),
     )
 
@@ -852,6 +884,7 @@ async def test_a_retry_does_not_record_a_result_yet() -> None:
         {},
         slots,
         cfg,
+        WorkerStats(),
         wants_result(b"1-0"),
     )
 
@@ -879,6 +912,7 @@ async def test_a_foreign_entry_goes_to_its_broker_handler_raw() -> None:
         {"orders": on_order},
         slots,
         WorkerConfig(),
+        WorkerStats(),
         foreign,
     )
 
@@ -905,6 +939,7 @@ async def test_a_failing_broker_handler_is_not_acked() -> None:
         {"orders": on_order},
         slots,
         WorkerConfig(),
+        WorkerStats(),
         Record(stream="orders", entry_id=b"1-0", fields={b"sku": b"A1"}),
     )
 
@@ -926,6 +961,7 @@ async def test_a_foreign_stream_with_no_handler_is_left_alone() -> None:
         {},
         slots,
         WorkerConfig(),
+        WorkerStats(),
         Record(stream="orders", entry_id=b"1-0", fields={b"sku": b"A1"}),
     )
 
@@ -1020,6 +1056,7 @@ async def test_a_failure_while_handling_a_failure_leaves_the_entry_pending() -> 
         {},
         slots,
         WorkerConfig(),
+        WorkerStats(),
         record(b"1-0"),
     )
 
@@ -1052,8 +1089,165 @@ async def test_a_broker_ack_failure_is_not_routed_through_the_retry_path() -> No
         {"orders": on_order},
         slots,
         WorkerConfig(),
+        WorkerStats(),
         Record(stream="orders", entry_id=b"1-0", fields={b"sku": b"A1"}),
     )
 
     assert scheduler.scheduled == []
     assert slots.ids == set()
+
+
+class UnreachableTransport(FakeTransport):
+    """Every command fails, as they do while a connection is being replaced."""
+
+    async def refresh_alive(self, entry_ids: Iterable[bytes], *, ttl_ms: int) -> None:
+        raise ConnectionError("connection closed by server")
+
+    async def trim(self, *, retention_ms: int) -> None:
+        raise ConnectionError("connection closed by server")
+
+    async def pending(self, *, count: int, min_idle_ms: int) -> list[Pending]:
+        raise ConnectionError("connection closed by server")
+
+
+async def test_the_heartbeat_loop_survives_a_dropped_connection() -> None:
+    """If this loop dies, liveness lapses and healthy work is reclaimed."""
+    sleep = StopAfter(3)
+
+    with pytest.raises(_StopLoop):
+        await _heartbeat_loop(
+            UnreachableTransport(),
+            Slots(),
+            WorkerConfig(recovery_interval_s=5.0),
+            sleep,
+        )
+
+    assert sleep.calls == [5.0, 5.0, 5.0], "it should back off, not spin or die"
+
+
+async def test_the_trim_loop_survives_a_dropped_connection() -> None:
+    sleep = StopAfter(2)
+
+    with pytest.raises(_StopLoop):
+        await _trim_loop(
+            UnreachableTransport(), WorkerConfig(recovery_interval_s=5.0), sleep
+        )
+
+    assert sleep.calls == [5.0, 5.0]
+
+
+async def test_the_reclaim_loop_survives_a_dropped_connection() -> None:
+    sleep = StopAfter(2)
+
+    with pytest.raises(_StopLoop):
+        await _reclaim_loop(
+            UnreachableTransport(),
+            Slots(),
+            WorkerConfig(recovery_interval_s=5.0),
+            sleep,
+            lambda rec: None,
+            WorkerStats(),
+        )
+
+    assert sleep.calls == [5.0, 5.0]
+
+
+async def test_the_scheduler_loop_survives_a_dropped_connection() -> None:
+    """And gives the lease back, so a healthy peer can take over promptly."""
+
+    class UnreachableScheduler(FakeScheduler):
+        async def hold_leadership(self, token: str, *, ttl_ms: int) -> bool:
+            self.tokens.append(token)
+            raise ConnectionError("connection closed by server")
+
+    scheduler = UnreachableScheduler()
+    sleep = StopAfter(2)
+
+    with pytest.raises(_StopLoop):
+        await _scheduler_loop(
+            scheduler, [], WorkerConfig(recovery_interval_s=5.0), sleep
+        )
+
+    assert sleep.calls == [5.0, 5.0]
+    assert scheduler.released == scheduler.tokens[:1]
+
+
+async def test_an_unknown_task_is_counted_not_only_logged() -> None:
+    """A log line is noise during a rollout and an incident afterwards.
+
+    Only a number tells the two apart, which is why the field notes ask for a
+    counter by name.
+    """
+    stats = WorkerStats()
+    slots = Slots()
+    slots.take([b"1-0"])
+
+    await _run_one(
+        FakeTransport(),
+        FakeScheduler(),
+        None,
+        {},
+        {},
+        slots,
+        WorkerConfig(),
+        stats,
+        record(b"1-0", task="from_the_future"),
+    )
+
+    assert stats.unknown_task == 1
+    assert stats.buried == 0
+    assert stats.in_flight == 0
+
+
+async def test_the_counters_follow_a_job_through_its_outcomes() -> None:
+    stats = WorkerStats()
+    slots = Slots()
+
+    async def ok(envelope: Envelope) -> None:
+        return None
+
+    async def boom(envelope: Envelope) -> None:
+        raise RuntimeError("boom")
+
+    slots.take([b"1-0"])
+    await _run_one(
+        FakeTransport(),
+        FakeScheduler(),
+        None,
+        {"reindex": ok},
+        {},
+        slots,
+        WorkerConfig(),
+        stats,
+        record(b"1-0"),
+    )
+    slots.take([b"2-0"])
+    await _run_one(
+        FakeTransport(),
+        FakeScheduler(),
+        None,
+        {"reindex": boom},
+        {},
+        slots,
+        WorkerConfig(retry=RetryPolicy(max_attempts=5)),
+        stats,
+        record(b"2-0"),
+    )
+    slots.take([b"3-0"])
+    await _run_one(
+        FakeTransport(),
+        FakeScheduler(),
+        None,
+        {"reindex": boom},
+        {},
+        slots,
+        WorkerConfig(retry=RetryPolicy(max_attempts=1)),
+        stats,
+        record(b"3-0"),
+    )
+
+    assert stats.snapshot() | {"handled": 1, "failed": 2, "retried": 1, "buried": 1}
+    assert stats.handled == 1
+    assert stats.failed == 2
+    assert stats.retried == 1
+    assert stats.buried_by_reason == {"max_attempts": 1}

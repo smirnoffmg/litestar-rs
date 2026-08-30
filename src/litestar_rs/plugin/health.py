@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from litestar_rs.core.protocols import StreamTransport
+from litestar_rs.core.stats import WorkerStats
 
 
 @dataclass(frozen=True, slots=True)
@@ -18,16 +19,21 @@ class QueueHealth:
     queues: tuple[str, ...]
     lag: int | None
     """Depth from XINFO GROUPS. None when Redis cannot reconcile its counters."""
+    stats: dict[str, int]
+    """This process's own counters. All zero in a web process, which runs no tasks."""
 
     @property
     def healthy(self) -> bool:
         return self.lag is not None
 
 
-async def queue_health(transport: StreamTransport) -> QueueHealth:
+async def queue_health(
+    transport: StreamTransport, stats: WorkerStats | None = None
+) -> QueueHealth:
     return QueueHealth(
         namespace=transport.namespace,
         group=transport.group,
         queues=tuple(transport.queues),
         lag=await transport.lag(),
+        stats=(stats or WorkerStats()).snapshot(),
     )

@@ -60,7 +60,7 @@ The original payload is untouched, so replaying is re-enqueueing it. Reset
 `attempt` unless you want the replay to inherit the exhausted budget:
 
 ```python
-from litestar_rs import from_fields  # litestar_rs.core
+from litestar_rs import from_fields
 import msgspec.structs
 
 envelope = from_fields(fields)

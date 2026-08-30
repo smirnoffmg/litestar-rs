@@ -29,6 +29,7 @@ from litestar_rs.core.protocols import (
     TaskHandler,
 )
 from litestar_rs.core.retry import RetryPolicy
+from litestar_rs.core.stats import WorkerStats
 
 logger = logging.getLogger(__name__)
 
@@ -134,6 +135,7 @@ async def run(
     scheduler: Scheduler,
     results: ResultStore | None = None,
     brokers: Mapping[str, BrokerHandler] | None = None,
+    stats: WorkerStats | None = None,
     sleep: Sleeper = anyio.sleep,
     shutdown: anyio.Event | None = None,
     cron: Sequence[CronJob] = (),
@@ -141,6 +143,7 @@ async def run(
     cfg = config or WorkerConfig()
     stop = shutdown or anyio.Event()
     slots = Slots()
+    counters = stats or WorkerStats()
 
     await transport.ensure_group()
     slots.recoverable = await _orphans_of_previous_run(transport, cfg)
@@ -164,12 +167,13 @@ async def run(
                     brokers or {},
                     slots,
                     cfg,
+                    counters,
                     record,
                 )
 
             async def reclaim() -> None:
                 with reclaiming:
-                    await _reclaim_loop(transport, slots, cfg, sleep, spawn)
+                    await _reclaim_loop(transport, slots, cfg, sleep, spawn, counters)
 
             handlers.start_soon(reclaim)
             await _consume_loop(transport, slots, cfg, stop, spawn)
@@ -241,8 +245,10 @@ async def _run_one(
     brokers: Mapping[str, BrokerHandler],
     slots: Slots,
     cfg: WorkerConfig,
+    stats: WorkerStats,
     record: Record,
 ) -> None:
+    stats.in_flight += 1
     try:
         if transport.is_external(record.stream):
             await _run_broker(transport, brokers, record)
@@ -252,19 +258,24 @@ async def _run_one(
         except MalformedEnvelope as exc:
             # No deployment will ever decode this. Retrying is pure noise.
             logger.exception("undecodable entry %r", record.entry_id)
-            await _dead_letter(transport, record, reason="malformed", error=exc)
+            await _dead_letter(
+                transport, record, reason="malformed", error=exc, stats=stats
+            )
             return
 
         handler = registry.get(envelope.task)
         if handler is None:
-            await _hand_back_unknown(transport, scheduler, slots, cfg, record, envelope)
+            await _hand_back_unknown(
+                transport, scheduler, slots, cfg, stats, record, envelope
+            )
             return
 
-        if not await _may_run(transport, cfg, envelope):
+        if not await _may_run(transport, cfg, stats, envelope):
             await transport.ack(record.stream, [record.entry_id])
             return
 
         value = await handler(envelope)
+        stats.handled += 1
         await _keep_result(
             results, envelope, TaskResult(ok=True, value=_encoded(value))
         )
@@ -277,11 +288,12 @@ async def _run_one(
         raise
     except Exception as exc:
         logger.exception("task from entry %r failed", record.entry_id)
+        stats.failed += 1
         if transport.is_external(record.stream):
             # Not ours to rewrite; redelivery is the only retry it has.
             return
         try:
-            await _retry_or_bury(transport, scheduler, results, cfg, record, exc)
+            await _retry_or_bury(transport, scheduler, results, cfg, stats, record, exc)
         except Exception:
             # Recovery failed too -- usually the same connection that just died.
             # Leaving the entry unacked is the safe outcome: it stays in the
@@ -291,6 +303,7 @@ async def _run_one(
                 record.entry_id,
             )
     finally:
+        stats.in_flight -= 1
         slots.release(record.entry_id)
 
 
@@ -308,7 +321,10 @@ async def _keep_result(
 
 
 async def _may_run(
-    transport: StreamTransport, cfg: WorkerConfig, envelope: Envelope
+    transport: StreamTransport,
+    cfg: WorkerConfig,
+    stats: WorkerStats,
+    envelope: Envelope,
 ) -> bool:
     """Gate a job on its deduplication key, if it carries one.
 
@@ -322,6 +338,7 @@ async def _may_run(
     )
     if not won:
         logger.info("skipping %r, dedup key %r taken", envelope.id, envelope.dedup)
+        stats.skipped_duplicate += 1
     return won
 
 
@@ -355,6 +372,7 @@ async def _retry_or_bury(
     scheduler: Scheduler,
     results: ResultStore | None,
     cfg: WorkerConfig,
+    stats: WorkerStats,
     record: Record,
     exc: BaseException,
 ) -> None:
@@ -367,13 +385,16 @@ async def _retry_or_bury(
             envelope,
             TaskResult(ok=False, error=f"{type(exc).__name__}: {exc}"),
         )
-        await _dead_letter(transport, record, reason="max_attempts", error=exc)
+        await _dead_letter(
+            transport, record, reason="max_attempts", error=exc, stats=stats
+        )
         return
 
     # Jitter keeps a batch that failed together from retrying together forever;
     # it is spacing, not a secret, so the cheap generator is the right one.
     draw = random.random()  # noqa: S311
     delay = cfg.retry.delay_ms(envelope.attempt, rand=draw)
+    stats.retried += 1
     await _reschedule(
         transport,
         scheduler,
@@ -393,6 +414,7 @@ async def _hand_back_unknown(
     scheduler: Scheduler,
     slots: Slots,
     cfg: WorkerConfig,
+    stats: WorkerStats,
     record: Record,
     envelope: Envelope,
 ) -> None:
@@ -402,11 +424,17 @@ async def _hand_back_unknown(
     rather than attempts: a deploy takes minutes, and counting tries would bury
     perfectly good work halfway through one.
     """
+    stats.unknown_task += 1
     age_ms = await scheduler.now_ms() - envelope.enqueued_at
     if cfg.retry.unknown_task_expired(age_ms=age_ms):
         logger.error("task %r still unknown after %dms, burying", envelope.task, age_ms)
         await _dead_letter(
-            transport, record, reason="unknown_task", error=None, detail=envelope.task
+            transport,
+            record,
+            reason="unknown_task",
+            error=None,
+            detail=envelope.task,
+            stats=stats,
         )
         return
 
@@ -452,6 +480,7 @@ async def _dead_letter(
     *,
     reason: str,
     error: BaseException | None,
+    stats: WorkerStats,
     detail: str = "",
     times_delivered: int = 1,
 ) -> None:
@@ -463,6 +492,7 @@ async def _dead_letter(
     await transport.dead_letter(
         record, reason=reason, detail=detail, times_delivered=times_delivered
     )
+    stats.bury(reason)
     await transport.ack(record.stream, [record.entry_id])
 
 
@@ -485,6 +515,7 @@ async def _reclaim_loop(
     cfg: WorkerConfig,
     sleep: Sleeper,
     spawn: Spawn,
+    stats: WorkerStats,
 ) -> None:
     while True:
         try:
@@ -531,9 +562,11 @@ async def _reclaim_loop(
                             error=None,
                             detail=f"delivered {candidate.times_delivered} times",
                             times_delivered=candidate.times_delivered,
+                            stats=stats,
                         )
                     continue
                 slots.take([record.entry_id for record in records])
+                stats.reclaimed += len(records)
                 for record in records:
                     spawn(record)
         except Exception:
@@ -593,6 +626,7 @@ async def run_with_signals(
     scheduler: Scheduler,
     results: ResultStore | None = None,
     brokers: Mapping[str, BrokerHandler] | None = None,
+    stats: WorkerStats | None = None,
     cron: Sequence[CronJob] = (),
 ) -> None:
     """Run until SIGTERM or SIGINT; a second signal means now, not soon."""
@@ -606,6 +640,7 @@ async def run_with_signals(
             scheduler=scheduler,
             results=results,
             brokers=brokers,
+            stats=stats,
             cron=cron,
             shutdown=stop,
         )

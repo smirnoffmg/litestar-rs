@@ -14,8 +14,8 @@ This is what sits outside them.
 - [ ] **Cluster resharding.** The suite runs against a three-node cluster, so
       MOVED redirects happen and the cross-slot rule has real owners behind it.
       Moving slots between nodes while a worker is consuming is not covered.
-- [ ] **Metrics.** Depth is exposed through the health endpoint; there is no
-      counter for `unknown_task`, retries or DLQ writes, which `pitfalls.md` §3
-      asks for by name.
+- [x] **Metrics.** The health endpoint carries this process's counters,
+      including `unknown_task`, retries and DLQ writes by reason. Exporting them
+      to Prometheus is left to the application.
 - [ ] **A payload store implementation.** The seam and the threshold exist; no
       backend ships, so every user writes the same S3 adapter.

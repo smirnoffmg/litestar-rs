@@ -6,6 +6,7 @@ every wait from this suite -- no test sleeps or crosses a timeout.
 """
 
 from collections.abc import Awaitable, Callable
+from typing import Any
 
 import anyio
 import pytest
@@ -260,3 +261,49 @@ async def test_external_streams_share_the_group_and_the_worker(
     finally:
         await reader.aclose()
         await control.aclose()
+
+
+async def test_lag_is_none_when_redis_cannot_report_it(
+    transport: RedisStreamsTransport,
+) -> None:
+    """A missing depth reading is not a zero-depth queue.
+
+    Redis gives up on `lag` once entries are deleted without ever being
+    delivered, and the health endpoint reads that as unhealthy rather than idle.
+    """
+    stream = transport.streams[0]
+    for job in range(3):
+        await transport.enqueue(envelope(id=f"job-{job}"), queue=transport.queues[0])
+    entries: Any = await transport.control.xrange(stream)
+    undelivered: bytes = entries[1][0]
+    await transport.control.xdel(stream, undelivered)
+
+    assert await transport.lag() is None
+
+
+async def test_acking_nothing_is_not_a_command(
+    transport: RedisStreamsTransport,
+) -> None:
+    assert await transport.ack(transport.streams[0], []) == 0
+    assert await transport.pending(count=0, min_idle_ms=0) == []
+
+
+async def test_ensure_group_reraises_a_real_error(
+    transport: RedisStreamsTransport,
+) -> None:
+    """Only BUSYGROUP is swallowed; anything else is a genuine failure."""
+    from redis.exceptions import ResponseError
+
+    broken = RedisStreamsTransport(
+        reader=transport.reader,
+        control=transport.control,
+        consumer="worker-1",
+        namespace=transport.namespace,
+        group="workers",
+        block_ms=100,
+    )
+    broken.streams = ["not-a-stream-but-a-string"]
+    await transport.control.set("not-a-stream-but-a-string", "wrong type entirely")
+
+    with pytest.raises(ResponseError):
+        await broken.ensure_group()

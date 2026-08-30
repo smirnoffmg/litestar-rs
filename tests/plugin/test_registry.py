@@ -184,3 +184,21 @@ async def test_a_rolled_back_unit_of_work_publishes_nothing() -> None:
     await deferred.flush()
 
     assert enqueuer.enqueued == []
+
+
+async def test_asking_for_a_result_without_a_store_says_so() -> None:
+    registry, _, _ = build()
+
+    with pytest.raises(ConfigurationError, match="result store"):
+        await registry.result("job-1")
+
+
+def test_an_unbound_task_is_reported_rather_than_missing() -> None:
+    """Before the application starts, nothing is settled yet."""
+    registry = TaskRegistry()
+
+    @registry.task
+    async def reindex() -> None: ...
+
+    with pytest.raises(ConfigurationError, match="not bound"):
+        registry.bound("reindex")

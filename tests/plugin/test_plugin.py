@@ -10,6 +10,7 @@ from litestar.di import Provide
 from litestar.testing import AsyncTestClient
 from redis.asyncio import Redis
 
+from litestar_rs.core.errors import ConfigurationError
 from litestar_rs.core.keys import stream_key
 from litestar_rs.core.testing import worker_running
 from litestar_rs.core.worker import WorkerConfig
@@ -118,6 +119,10 @@ async def test_health_reports_the_group(redis_url: str, namespace: str) -> None:
     assert body["group"] == "workers"
     assert body["queues"] == ["default"]
     assert body["lag"] == 0
+    # A web process runs no tasks, so its own counters are all zero -- which is
+    # the honest answer, not a missing section.
+    assert body["stats"]["handled"] == 0
+    assert body["stats"]["unknown_task"] == 0
 
 
 def test_the_worker_serves_the_same_health_route(
@@ -134,3 +139,26 @@ def test_the_worker_serves_the_same_health_route(
     served = {route.path for route in worker_app.routes}
     assert served == {plugin.config.health_path}
     assert plugin.config.health_path in {route.path for route in app.routes}
+
+
+def test_using_the_queue_before_it_opens_says_so(
+    redis_url: str, namespace: str
+) -> None:
+    """Connections open with the application, and an attribute error would not
+    explain why."""
+    _, plugin = make_app(redis_url, namespace)
+
+    for attribute in ("transport", "scheduler", "results"):
+        with pytest.raises(ConfigurationError, match="not connected yet"):
+            getattr(plugin, attribute)
+
+
+def test_the_plugin_extends_the_cli(redis_url: str, namespace: str) -> None:
+    import click
+
+    _, plugin = make_app(redis_url, namespace)
+    group = click.Group()
+
+    plugin.on_cli_init(group)
+
+    assert "workers" in group.commands

@@ -101,6 +101,7 @@ def run_workers(
                 config.worker,
                 scheduler=plugin.scheduler,
                 results=plugin.results,
+                stats=plugin.stats,
                 cron=config.cron,
             )
             tg.cancel_scope.cancel()

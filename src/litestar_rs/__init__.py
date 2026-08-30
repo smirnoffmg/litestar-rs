@@ -31,9 +31,12 @@ from litestar_rs.core import (
     TaskResult,
     UnknownTask,
     WorkerConfig,
+    WorkerStats,
     current_enqueuer,
+    from_fields,
     run,
     run_with_signals,
+    to_fields,
     worker_running,
 )
 
@@ -67,9 +70,12 @@ __all__ = [
     "TaskResult",
     "UnknownTask",
     "WorkerConfig",
+    "WorkerStats",
     "__version__",
     "current_enqueuer",
+    "from_fields",
     "run",
     "run_with_signals",
+    "to_fields",
     "worker_running",
 ]

@@ -16,6 +16,7 @@ from litestar_rs.core.envelope import Envelope, TaskResult
 from litestar_rs.core.errors import ConfigurationError
 from litestar_rs.core.results import RedisResultStore
 from litestar_rs.core.scheduler import RedisScheduler
+from litestar_rs.core.stats import WorkerStats
 from litestar_rs.core.transport import RedisStreamsTransport
 from litestar_rs.plugin.config import QueueConfig
 from litestar_rs.plugin.health import QueueHealth, queue_health
@@ -38,6 +39,8 @@ class QueuePlugin(InitPlugin, CLIPlugin):
         self._transport: RedisStreamsTransport | None = None
         self._scheduler: RedisScheduler | None = None
         self._results: RedisResultStore | None = None
+        self.stats = WorkerStats()
+        """Counters for this process, served by the health endpoint."""
 
     @property
     def transport(self) -> RedisStreamsTransport:
@@ -158,7 +161,7 @@ class QueuePlugin(InitPlugin, CLIPlugin):
 
         @get(self.config.health_path)
         async def health() -> QueueHealth:
-            return await queue_health(plugin.transport)
+            return await queue_health(plugin.transport, plugin.stats)
 
         return health
 

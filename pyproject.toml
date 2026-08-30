@@ -140,7 +140,7 @@ layers = [
     "transport : scheduler : results",
     "scripts",
     "protocols",
-    "cron : retry : clients",
+    "cron : retry : clients : stats",
     "envelope : keys",
     "errors",
 ]
