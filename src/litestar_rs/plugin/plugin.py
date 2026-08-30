@@ -143,6 +143,16 @@ class QueuePlugin(InitPlugin, CLIPlugin):
             await reader.aclose()
             await control.aclose()
 
+    def health_app(self) -> Litestar:
+        """A tiny application serving nothing but the health route.
+
+        The worker serves this one so that a readiness probe against a worker
+        deployment asks exactly the question it asks a web one, computed by the
+        same function rather than a lookalike.
+        """
+        # No OpenAPI: a worker serves one route for a probe, not an API surface.
+        return Litestar(route_handlers=[self._health_route()], openapi_config=None)
+
     def _health_route(self) -> Any:
         plugin = self
 

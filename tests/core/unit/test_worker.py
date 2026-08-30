@@ -39,17 +39,22 @@ class _StopLoop(Exception):
     """Ends an otherwise infinite supervisor loop at a known iteration."""
 
 
-def stop_after(turns: int) -> object:
-    calls: list[float] = []
+class StopAfter:
+    """A sleeper that returns instantly and ends the loop after `turns` waits.
 
-    async def sleep(delay: float) -> None:
-        calls.append(delay)
-        if len(calls) >= turns:
+    A class rather than a closure so it satisfies `Sleeper` without a cast, and
+    so the delays it was asked for can be asserted on.
+    """
+
+    def __init__(self, turns: int) -> None:
+        self.turns = turns
+        self.calls: list[float] = []
+
+    async def __call__(self, delay: float) -> None:
+        self.calls.append(delay)
+        if len(self.calls) >= self.turns:
             raise _StopLoop
         await anyio.lowlevel.checkpoint()
-
-    sleep.calls = calls  # type: ignore[attr-defined]
-    return sleep
 
 
 def record(entry_id: bytes, task: str = "reindex") -> Record:
@@ -420,13 +425,13 @@ async def test_heartbeat_refreshes_exactly_what_is_in_flight() -> None:
     transport = FakeTransport()
     slots = Slots()
     slots.take([b"1-0", b"2-0"])
-    sleep = stop_after(3)
+    sleep = StopAfter(3)
 
     with pytest.raises(_StopLoop):
-        await _heartbeat_loop(transport, slots, WorkerConfig(), sleep)  # type: ignore[arg-type]
+        await _heartbeat_loop(transport, slots, WorkerConfig(), sleep)
 
     assert [sorted(ids) for ids in transport.refreshed] == [[b"1-0", b"2-0"]] * 3
-    assert sleep.calls == [10.0, 10.0, 10.0]  # type: ignore[attr-defined]
+    assert sleep.calls == [10.0, 10.0, 10.0]
 
 
 async def test_a_handler_that_never_returns_keeps_being_refreshed() -> None:
@@ -434,7 +439,7 @@ async def test_a_handler_that_never_returns_keeps_being_refreshed() -> None:
     transport = FakeTransport()
     slots = Slots()
     config = WorkerConfig(alive_ttl_ms=300)
-    sleep = stop_after(4)
+    sleep = StopAfter(4)
 
     async def never_returns(envelope: Envelope) -> None:
         await anyio.sleep_forever()
@@ -456,7 +461,7 @@ async def test_a_handler_that_never_returns_keeps_being_refreshed() -> None:
 
             async def heartbeat() -> None:
                 with pytest.raises(_StopLoop):
-                    await _heartbeat_loop(transport, slots, config, sleep)  # type: ignore[arg-type]
+                    await _heartbeat_loop(transport, slots, config, sleep)
                 scope.cancel()
 
             tg.start_soon(heartbeat)
@@ -474,14 +479,14 @@ async def test_reclaim_respects_credits_and_skips_what_it_cannot_run() -> None:
     slots.take([b"busy"])
     slots.unhandled.add(b"8-0")
     spawned: list[bytes] = []
-    sleep = stop_after(1)
+    sleep = StopAfter(1)
 
     with pytest.raises(_StopLoop):
         await _reclaim_loop(
             transport,
             slots,
             WorkerConfig(concurrency=4),
-            sleep,  # type: ignore[arg-type]
+            sleep,
             lambda rec: spawned.append(rec.entry_id),
         )
 
@@ -559,7 +564,7 @@ async def test_an_entry_delivered_too_often_is_buried_not_run() -> None:
     )
     slots = Slots()
     spawned: list[bytes] = []
-    sleep = stop_after(1)
+    sleep = StopAfter(1)
 
     cfg = WorkerConfig(retry=RetryPolicy(max_deliveries=5))
     with pytest.raises(_StopLoop):
@@ -567,7 +572,7 @@ async def test_an_entry_delivered_too_often_is_buried_not_run() -> None:
             transport,
             slots,
             cfg,
-            sleep,  # type: ignore[arg-type]
+            sleep,
             lambda rec: spawned.append(rec.entry_id),
         )
 
@@ -586,10 +591,10 @@ def test_leader_lease_must_outlast_the_scheduler_interval() -> None:
 async def test_the_leader_promotes_every_pass() -> None:
     scheduler = FakeScheduler(lead=True)
     job = CronJob(name="nightly", expression="30 2 * * *", task="reindex")
-    sleep = stop_after(3)
+    sleep = StopAfter(3)
 
     with pytest.raises(_StopLoop):
-        await _scheduler_loop(scheduler, [job], WorkerConfig(), sleep)  # type: ignore[arg-type]
+        await _scheduler_loop(scheduler, [job], WorkerConfig(), sleep)
 
     assert scheduler.promotions == 3
     assert scheduler.cron_passes == 3
@@ -597,10 +602,10 @@ async def test_the_leader_promotes_every_pass() -> None:
 
 async def test_a_follower_promotes_nothing() -> None:
     scheduler = FakeScheduler(lead=False)
-    sleep = stop_after(2)
+    sleep = StopAfter(2)
 
     with pytest.raises(_StopLoop):
-        await _scheduler_loop(scheduler, [], WorkerConfig(), sleep)  # type: ignore[arg-type]
+        await _scheduler_loop(scheduler, [], WorkerConfig(), sleep)
 
     assert scheduler.promotions == 0
 
@@ -608,10 +613,10 @@ async def test_a_follower_promotes_nothing() -> None:
 async def test_leadership_is_released_when_the_loop_ends() -> None:
     """Otherwise a stopped worker holds the lease until its TTL runs out."""
     scheduler = FakeScheduler(lead=True)
-    sleep = stop_after(1)
+    sleep = StopAfter(1)
 
     with pytest.raises(_StopLoop):
-        await _scheduler_loop(scheduler, [], WorkerConfig(), sleep)  # type: ignore[arg-type]
+        await _scheduler_loop(scheduler, [], WorkerConfig(), sleep)
 
     assert scheduler.released == scheduler.tokens[:1]
 
@@ -622,14 +627,14 @@ async def test_reclaim_never_takes_back_our_own_in_flight_entry() -> None:
     slots = Slots()
     slots.take([b"7-0"])
     spawned: list[bytes] = []
-    sleep = stop_after(1)
+    sleep = StopAfter(1)
 
     with pytest.raises(_StopLoop):
         await _reclaim_loop(
             transport,
             slots,
             WorkerConfig(concurrency=4),
-            sleep,  # type: ignore[arg-type]
+            sleep,
             lambda rec: spawned.append(rec.entry_id),
         )
 
@@ -647,14 +652,14 @@ async def test_we_never_reclaim_an_entry_redis_just_served_us() -> None:
         pending=[pending(b"7-0", consumer="worker-1")], claimable={b"7-0"}
     )
     spawned: list[bytes] = []
-    sleep = stop_after(1)
+    sleep = StopAfter(1)
 
     with pytest.raises(_StopLoop):
         await _reclaim_loop(
             transport,
             Slots(),
             WorkerConfig(concurrency=4),
-            sleep,  # type: ignore[arg-type]
+            sleep,
             lambda rec: spawned.append(rec.entry_id),
         )
 
@@ -669,14 +674,14 @@ async def test_entries_left_by_a_previous_run_are_taken_back() -> None:
     slots = Slots()
     slots.recoverable = {b"7-0"}
     spawned: list[bytes] = []
-    sleep = stop_after(1)
+    sleep = StopAfter(1)
 
     with pytest.raises(_StopLoop):
         await _reclaim_loop(
             transport,
             slots,
             WorkerConfig(concurrency=4),
-            sleep,  # type: ignore[arg-type]
+            sleep,
             lambda rec: spawned.append(rec.entry_id),
         )
 
@@ -977,7 +982,7 @@ async def test_a_failed_read_does_not_leak_slots() -> None:
     async def explode(entry_ids: Sequence[bytes], *, ttl_ms: int) -> None:
         raise ConnectionError("connection closed by server")
 
-    transport.mark_alive = explode  # type: ignore[method-assign]
+    transport.mark_alive = explode  # type: ignore[method-assign]  # inject the failure
 
     async def sleep(delay: float) -> None:
         stop.set()
@@ -1001,8 +1006,8 @@ async def test_a_failure_while_handling_a_failure_leaves_the_entry_pending() -> 
     async def now_ms() -> int:
         raise ConnectionError("connection closed by server")
 
-    transport.ack = ack  # type: ignore[method-assign]
-    scheduler.now_ms = now_ms  # type: ignore[method-assign]
+    transport.ack = ack  # type: ignore[method-assign]  # inject the failure
+    scheduler.now_ms = now_ms  # type: ignore[method-assign]  # inject the failure
 
     async def handler(envelope: Envelope) -> None:
         return None
@@ -1034,7 +1039,7 @@ async def test_a_broker_ack_failure_is_not_routed_through_the_retry_path() -> No
     async def ack(stream: str, entry_ids: Sequence[bytes]) -> int:
         raise ConnectionError("connection closed by server")
 
-    transport.ack = ack  # type: ignore[method-assign]
+    transport.ack = ack  # type: ignore[method-assign]  # inject the failure
 
     async def on_order(entry: Record) -> None:
         return None

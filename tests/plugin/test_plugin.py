@@ -118,3 +118,19 @@ async def test_health_reports_the_group(redis_url: str, namespace: str) -> None:
     assert body["group"] == "workers"
     assert body["queues"] == ["default"]
     assert body["lag"] == 0
+
+
+def test_the_worker_serves_the_same_health_route(
+    redis_url: str, namespace: str
+) -> None:
+    """A readiness probe must ask a worker exactly what it asks a web process.
+
+    Structural on purpose: the body is already asserted through the web app, and
+    what could drift is the worker serving a lookalike route instead of this one.
+    """
+    app, plugin = make_app(redis_url, namespace)
+    worker_app = plugin.health_app()
+
+    served = {route.path for route in worker_app.routes}
+    assert served == {plugin.config.health_path}
+    assert plugin.config.health_path in {route.path for route in app.routes}

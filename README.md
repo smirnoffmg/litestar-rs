@@ -129,9 +129,10 @@ produces — a blocking `XREADGROUP` does not return an error straight away. It 
 tested twice: with `CLIENT KILL` against a standalone server, and with a real
 `SENTINEL FAILOVER` under an in-flight job.
 
-**Health.** The plugin serves an endpoint with consumer group state and lag. The
-worker opens its connections through the same context manager, so readiness
-probes for the web and worker deployments ask the same question.
+**Health.** The plugin serves an endpoint with consumer group state and lag, and
+the worker serves the same route from the same function
+(`litestar workers run --health-port 8081`), so readiness probes for the web and
+worker deployments ask an identical question.
 
 ## Execution contracts
 

@@ -54,6 +54,7 @@ dev = [
     "mkdocstrings[python]",
     "testcontainers[redis]>=4.15.0",
     "litestar>=2.0",
+    "uvicorn>=0.52.4",
 ]
 
 [tool.ruff]

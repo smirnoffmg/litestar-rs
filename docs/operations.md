@@ -40,6 +40,17 @@ missing reading is not a zero-depth queue, so `healthy` is false in that case.
 `XLEN` is meaningless here: acked entries are deleted, so the stream length is
 near zero regardless of backlog.
 
+A worker deployment has nothing to probe unless you ask for it:
+
+```bash
+litestar workers run --health-port 8081
+```
+
+That serves the same route, built by the same function, on the worker. A
+readiness probe against a worker then asks an identical question to one against
+a web process rather than a lookalike. It needs a server —
+`litestar[standard]`, which the `litestar` command itself already requires.
+
 ## Shutdown
 
 SIGTERM stops new reads and lets in-flight work finish. When
