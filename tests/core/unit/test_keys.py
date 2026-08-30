@@ -7,6 +7,10 @@ from litestar_rs.core.keys import (
     alive_key,
     dedup_key,
     dlq_key,
+    leader_key,
+    result_key,
+    result_wait_key,
+    sched_job_key,
     sched_key,
     stream_key,
     stream_keys,
@@ -70,3 +74,35 @@ def test_validators_return_the_value() -> None:
 def test_shard_count_must_be_positive() -> None:
     with pytest.raises(ConfigurationError, match="shards"):
         stream_keys("lrs", "default", 0)
+
+
+def test_every_key_of_a_namespace_lands_in_one_redis_slot() -> None:
+    """The real slot function, not a reading of the brace placement.
+
+    Multi-key XREADGROUP and both Lua scripts touch several of these at once, and
+    a cluster rejects that across slots. This is the invariant the whole key
+    schema exists to hold.
+    """
+    from redis.crc import key_slot
+
+    keys = [
+        stream_key("lrs", "high", 0),
+        stream_key("lrs", "low", 7),
+        alive_key("lrs", b"1712345678901-0"),
+        dedup_key("lrs", "invoice-42"),
+        result_key("lrs", "job-1"),
+        result_wait_key("lrs", "job-1"),
+        sched_key("lrs"),
+        sched_job_key("lrs", "cron:nightly:1712345678901"),
+        dlq_key("lrs"),
+        leader_key("lrs"),
+    ]
+
+    assert len({key_slot(key.encode()) for key in keys}) == 1
+
+
+def test_two_namespaces_do_not_have_to_share_a_slot() -> None:
+    """Separate namespaces are separate deployments; they need not collide."""
+    from redis.crc import key_slot
+
+    assert key_slot(sched_key("one").encode()) != key_slot(sched_key("two").encode())
