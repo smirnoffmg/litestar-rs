@@ -122,6 +122,7 @@ class QueuePlugin(InitPlugin, CLIPlugin):
                 shards=config.shards,
                 group=config.group,
                 block_ms=config.block_ms,
+                external=config.external,
             )
             self._scheduler = RedisScheduler(
                 control=control, namespace=config.namespace, shards=config.shards

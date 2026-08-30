@@ -39,6 +39,7 @@ class StreamTransport(Protocol):
     queues: tuple[str, ...]
 
     def queue_of(self, stream: str) -> str: ...
+    def is_external(self, stream: str) -> bool: ...
     async def ensure_group(self) -> None: ...
     async def read(self, count: int) -> list[Record]: ...
     async def mark_alive(self, entry_ids: Sequence[bytes], *, ttl_ms: int) -> None: ...
@@ -79,6 +80,16 @@ class Scheduler(Protocol):
 
 class TaskHandler(Protocol):
     async def __call__(self, envelope: Envelope, /) -> object: ...
+
+
+class BrokerHandler(Protocol):
+    """Handles an entry this library did not write.
+
+    Broker mode gets the raw record: the payload is in somebody else's format,
+    so there is no envelope to decode and no result to store.
+    """
+
+    async def __call__(self, record: Record, /) -> None: ...
 
 
 class ResultStore(Protocol):

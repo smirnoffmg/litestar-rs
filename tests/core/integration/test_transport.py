@@ -223,3 +223,40 @@ async def test_a_dedup_key_can_be_claimed_once(
     assert await transport.claim_dedup("invoice-42", owner="a", ttl_ms=60_000) is True
     assert await transport.claim_dedup("invoice-42", owner="b", ttl_ms=60_000) is False
     assert await transport.claim_dedup("invoice-43", owner="b", ttl_ms=60_000) is True
+
+
+async def test_external_streams_share_the_group_and_the_worker(
+    redis_url: str, namespace: str
+) -> None:
+    """Both modes on one consumer group and one process is the whole point."""
+    from redis.asyncio import Redis
+
+    from litestar_rs.core.transport import RedisStreamsTransport
+
+    reader: Redis = Redis.from_url(redis_url, socket_timeout=30.0)
+    control: Redis = Redis.from_url(redis_url)
+    foreign = f"{{{namespace}}}:orders"
+    try:
+        transport = RedisStreamsTransport(
+            reader=reader,
+            control=control,
+            consumer="worker-1",
+            namespace=namespace,
+            block_ms=100,
+            external=(foreign,),
+        )
+        await transport.ensure_group()
+        await control.xadd(foreign, {b"sku": b"A1"})
+        await transport.enqueue(envelope(), queue=transport.queues[0])
+
+        seen = {record.stream: record for record in await transport.read(10)}
+        while len(seen) < 2:
+            for record in await transport.read(10):
+                seen[record.stream] = record
+
+        assert transport.is_external(foreign) is True
+        assert seen[foreign].fields == {b"sku": b"A1"}
+        assert transport.is_external(transport.streams[0]) is False
+    finally:
+        await reader.aclose()
+        await control.aclose()

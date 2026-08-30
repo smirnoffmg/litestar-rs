@@ -21,6 +21,7 @@ from litestar_rs.core.cron import CronJob
 from litestar_rs.core.envelope import Envelope, Record, TaskResult, from_fields
 from litestar_rs.core.errors import ConfigurationError, MalformedEnvelope
 from litestar_rs.core.protocols import (
+    BrokerHandler,
     ResultStore,
     Scheduler,
     Sleeper,
@@ -130,6 +131,7 @@ async def run(
     *,
     scheduler: Scheduler,
     results: ResultStore | None = None,
+    brokers: Mapping[str, BrokerHandler] | None = None,
     sleep: Sleeper = anyio.sleep,
     shutdown: anyio.Event | None = None,
     cron: Sequence[CronJob] = (),
@@ -157,6 +159,7 @@ async def run(
                     scheduler,
                     results,
                     registry,
+                    brokers or {},
                     slots,
                     cfg,
                     record,
@@ -222,11 +225,15 @@ async def _run_one(
     scheduler: Scheduler,
     results: ResultStore | None,
     registry: Mapping[str, TaskHandler],
+    brokers: Mapping[str, BrokerHandler],
     slots: Slots,
     cfg: WorkerConfig,
     record: Record,
 ) -> None:
     try:
+        if transport.is_external(record.stream):
+            await _run_broker(transport, brokers, record)
+            return
         try:
             envelope = from_fields(record.fields)
         except MalformedEnvelope as exc:
@@ -291,6 +298,31 @@ async def _may_run(
     if not won:
         logger.info("skipping %r, dedup key %r taken", envelope.id, envelope.dedup)
     return won
+
+
+async def _run_broker(
+    transport: StreamTransport,
+    brokers: Mapping[str, BrokerHandler],
+    record: Record,
+) -> None:
+    """Handle an entry from somebody else's stream.
+
+    There is nothing to re-enqueue -- the stream is not ours to write to -- so a
+    failure simply is not acked. Redelivery is the retry, and the delivery
+    ceiling is what eventually stops it.
+    """
+    handler = brokers.get(record.stream)
+    if handler is None:
+        logger.error("no broker handler for stream %r", record.stream)
+        return
+    try:
+        await handler(record)
+    except Exception:
+        # Deliberately not routed through the retry path: that rewrites the job
+        # into our own stream, and this entry belongs to somebody else.
+        logger.exception("broker handler for %r failed", record.stream)
+        return
+    await transport.ack(record.stream, [record.entry_id])
 
 
 async def _retry_or_bury(
@@ -513,6 +545,7 @@ async def run_with_signals(
     *,
     scheduler: Scheduler,
     results: ResultStore | None = None,
+    brokers: Mapping[str, BrokerHandler] | None = None,
     cron: Sequence[CronJob] = (),
 ) -> None:
     """Run until SIGTERM or SIGINT; a second signal means now, not soon."""
@@ -525,6 +558,7 @@ async def run_with_signals(
             config,
             scheduler=scheduler,
             results=results,
+            brokers=brokers,
             cron=cron,
             shutdown=stop,
         )

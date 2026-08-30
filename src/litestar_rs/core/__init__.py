@@ -18,6 +18,7 @@ from litestar_rs.core.errors import (
     PayloadTooLarge,
 )
 from litestar_rs.core.protocols import (
+    BrokerHandler,
     Codec,
     Enqueuer,
     ResultStore,
@@ -40,6 +41,7 @@ from litestar_rs.core.worker import WorkerConfig, run, run_with_signals
 
 __all__ = [
     "ENVELOPE_VERSION",
+    "BrokerHandler",
     "Codec",
     "CollectingEnqueuer",
     "ConfigurationError",

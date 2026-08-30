@@ -134,6 +134,7 @@ class FakeTransport:
         self.dedup_claims: list[str] = []
         self.dedup_taken: set[str] = set()
         self.reported_lag: int | None = 0
+        self.external: set[str] = set()
         self.events: list[str] = []
 
     consumer = "worker-1"
@@ -143,6 +144,9 @@ class FakeTransport:
 
     def queue_of(self, stream: str) -> str:
         return "default"
+
+    def is_external(self, stream: str) -> bool:
+        return stream in self.external
 
     async def lag(self) -> int | None:
         return self.reported_lag
@@ -304,6 +308,7 @@ async def test_successful_handler_acks_and_frees_the_slot() -> None:
         FakeScheduler(),
         None,
         {"reindex": handler},
+        {},
         slots,
         WorkerConfig(),
         record(b"1-0"),
@@ -329,6 +334,7 @@ async def test_a_failing_task_is_rescheduled_with_backoff() -> None:
         scheduler,
         None,
         {"reindex": handler},
+        {},
         slots,
         WorkerConfig(),
         record(b"1-0"),
@@ -355,7 +361,9 @@ async def test_a_task_out_of_attempts_is_buried() -> None:
         raise RuntimeError("boom")
 
     cfg = WorkerConfig(retry=RetryPolicy(max_attempts=3))
-    await _run_one(transport, scheduler, None, {"reindex": handler}, slots, cfg, spent)
+    await _run_one(
+        transport, scheduler, None, {"reindex": handler}, {}, slots, cfg, spent
+    )
 
     [(entry_id, reason, detail)] = transport.buried
     assert entry_id == b"1-0"
@@ -376,6 +384,7 @@ async def test_unknown_task_is_deferred_rather_than_acked_away() -> None:
         transport,
         scheduler,
         None,
+        {},
         {},
         slots,
         WorkerConfig(),
@@ -399,7 +408,7 @@ async def test_a_task_unknown_for_too_long_is_buried() -> None:
     stale.fields[b"enqueued_at"] = str(scheduler.now - 86_400_000).encode()
 
     cfg = WorkerConfig(retry=RetryPolicy(unknown_task_timeout_ms=3_600_000))
-    await _run_one(transport, scheduler, None, {}, slots, cfg, stale)
+    await _run_one(transport, scheduler, None, {}, {}, slots, cfg, stale)
 
     [(_, reason, detail)] = transport.buried
     assert reason == "unknown_task"
@@ -439,6 +448,7 @@ async def test_a_handler_that_never_returns_keeps_being_refreshed() -> None:
                 FakeScheduler(),
                 None,
                 {"reindex": never_returns},
+                {},
                 slots,
                 config,
                 record(b"1-0"),
@@ -532,7 +542,9 @@ async def test_an_undecodable_entry_is_buried_immediately() -> None:
     slots.take([b"1-0"])
     broken = Record(stream="s", entry_id=b"1-0", fields={b"v": b"1"})
 
-    await _run_one(transport, FakeScheduler(), None, {}, slots, WorkerConfig(), broken)
+    await _run_one(
+        transport, FakeScheduler(), None, {}, {}, slots, WorkerConfig(), broken
+    )
 
     [(entry_id, reason, _)] = transport.buried
     assert entry_id == b"1-0"
@@ -691,6 +703,7 @@ async def test_a_job_whose_dedup_key_is_taken_is_skipped_not_failed() -> None:
         FakeScheduler(),
         None,
         {"reindex": handler},
+        {},
         slots,
         WorkerConfig(),
         guarded,
@@ -715,6 +728,7 @@ async def test_a_job_without_a_dedup_key_is_not_gated() -> None:
         FakeScheduler(),
         None,
         {"reindex": handler},
+        {},
         slots,
         WorkerConfig(),
         record(b"1-0"),
@@ -757,6 +771,7 @@ async def test_a_result_is_kept_only_when_someone_asked_for_one() -> None:
         FakeScheduler(),
         results,
         {"reindex": handler},
+        {},
         slots,
         WorkerConfig(),
         record(b"1-0"),
@@ -778,6 +793,7 @@ async def test_a_requested_result_is_kept_with_its_ttl() -> None:
         FakeScheduler(),
         results,
         {"reindex": handler},
+        {},
         slots,
         WorkerConfig(),
         wants_result(b"1-0", ttl_ms=1234),
@@ -801,6 +817,7 @@ async def test_a_buried_job_records_its_failure_for_the_waiter() -> None:
         FakeScheduler(),
         results,
         {"reindex": handler},
+        {},
         slots,
         cfg,
         wants_result(b"1-0"),
@@ -827,9 +844,85 @@ async def test_a_retry_does_not_record_a_result_yet() -> None:
         FakeScheduler(),
         results,
         {"reindex": handler},
+        {},
         slots,
         cfg,
         wants_result(b"1-0"),
     )
 
     assert results.stored == []
+
+
+async def test_a_foreign_entry_goes_to_its_broker_handler_raw() -> None:
+    """No envelope: the payload is in somebody else's format."""
+    transport = FakeTransport()
+    transport.external.add("orders")
+    seen: list[dict[bytes, bytes]] = []
+
+    async def on_order(entry: Record) -> None:
+        seen.append(entry.fields)
+
+    foreign = Record(stream="orders", entry_id=b"1-0", fields={b"sku": b"A1"})
+    slots = Slots()
+    slots.take([b"1-0"])
+
+    await _run_one(
+        transport,
+        FakeScheduler(),
+        None,
+        {},
+        {"orders": on_order},
+        slots,
+        WorkerConfig(),
+        foreign,
+    )
+
+    assert seen == [{b"sku": b"A1"}]
+    assert transport.acked == [("orders", [b"1-0"])]
+
+
+async def test_a_failing_broker_handler_is_not_acked() -> None:
+    """The stream is not ours to rewrite, so redelivery is the only retry."""
+    transport = FakeTransport()
+    transport.external.add("orders")
+
+    async def on_order(entry: Record) -> None:
+        raise RuntimeError("bad order")
+
+    slots = Slots()
+    slots.take([b"1-0"])
+
+    await _run_one(
+        transport,
+        FakeScheduler(),
+        None,
+        {},
+        {"orders": on_order},
+        slots,
+        WorkerConfig(),
+        Record(stream="orders", entry_id=b"1-0", fields={b"sku": b"A1"}),
+    )
+
+    assert transport.acked == []
+    assert slots.ids == set()
+
+
+async def test_a_foreign_stream_with_no_handler_is_left_alone() -> None:
+    transport = FakeTransport()
+    transport.external.add("orders")
+    slots = Slots()
+    slots.take([b"1-0"])
+
+    await _run_one(
+        transport,
+        FakeScheduler(),
+        None,
+        {},
+        {},
+        slots,
+        WorkerConfig(),
+        Record(stream="orders", entry_id=b"1-0", fields={b"sku": b"A1"}),
+    )
+
+    assert transport.acked == []
+    assert transport.buried == []

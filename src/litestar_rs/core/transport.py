@@ -58,6 +58,7 @@ class RedisStreamsTransport:
         queues: Sequence[str] = DEFAULT_QUEUES,
         shards: int = 1,
         fairness_every: int = 10,
+        external: Sequence[str] = (),
         group: str = DEFAULT_GROUP,
         block_ms: int = 5_000,
         max_payload_bytes: int = DEFAULT_MAX_PAYLOAD_BYTES,
@@ -123,6 +124,11 @@ class RedisStreamsTransport:
             for queue, streams in self.streams_by_queue.items()
             for stream in streams
         }
+        self.external_streams = tuple(external)
+        if set(self.external_streams) & set(self.streams):
+            raise ConfigurationError(
+                "external streams must not name this namespace's own queues"
+            )
         self.dlq = dlq_key(self.namespace)
         self._passes = 0
         self._scripts: TransportScripts = register_transport(control)
@@ -131,7 +137,7 @@ class RedisStreamsTransport:
         return alive_key(self.namespace, entry_id)
 
     async def ensure_group(self) -> None:
-        for stream in self.streams:
+        for stream in (*self.streams, *self.external_streams):
             try:
                 await self.control.xgroup_create(
                     stream, self.group, id="0", mkstream=True
@@ -157,6 +163,10 @@ class RedisStreamsTransport:
     def queue_of(self, stream: str) -> str:
         return self._queue_of[stream]
 
+    def is_external(self, stream: str) -> bool:
+        """A stream somebody else writes, in somebody else's format."""
+        return stream in self.external_streams
+
     def _priority_order(self) -> list[str]:
         """Which queue to try first this pass.
 
@@ -175,6 +185,12 @@ class RedisStreamsTransport:
             # XREADGROUP COUNT 0 is not the same thing as not reading: a fixed
             # COUNT is what skews work between workers (taskiq-redis#91).
             return []
+        if self.external_streams:
+            # Read separately: foreign stream names carry no hash tag of ours, so
+            # putting them in the same XREADGROUP would break in a cluster.
+            records = await self._read(self.external_streams, count, None)
+            if records:
+                return records
         if len(self.queues) > 1:
             # XREADGROUP with BLOCK wakes on whichever stream has something, so
             # it cannot express priority. A non-blocking sweep from high to low
@@ -244,7 +260,7 @@ class RedisStreamsTransport:
         if count <= 0:
             return []
         found: list[Pending] = []
-        for stream in self.streams:
+        for stream in (*self.streams, *self.external_streams):
             entries = await self.control.xpending_range(
                 stream,
                 self.group,
@@ -310,7 +326,7 @@ class RedisStreamsTransport:
     async def lag(self) -> int | None:
         """Depth from XINFO GROUPS. Redis reports NULL when it cannot reconcile."""
         total = 0
-        for stream in self.streams:
+        for stream in (*self.streams, *self.external_streams):
             groups = await self.control.xinfo_groups(stream)
             for group in groups:
                 if _as_bytes(_get(group, "name")) != self.group.encode():
