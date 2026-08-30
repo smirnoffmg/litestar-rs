@@ -92,6 +92,18 @@ class BrokerHandler(Protocol):
     async def __call__(self, record: Record, /) -> None: ...
 
 
+class PayloadStore(Protocol):
+    """Somewhere large arguments live instead of in Redis.
+
+    Redis holds the stream in memory, so a payload measured in megabytes is a
+    direct route to an out-of-memory kill. Above a threshold the arguments go
+    here and the entry carries a reference.
+    """
+
+    async def put(self, job_id: str, data: bytes) -> str: ...
+    async def get(self, reference: str) -> bytes: ...
+
+
 class ResultStore(Protocol):
     """Where a job's outcome goes when somebody is waiting for one."""
 

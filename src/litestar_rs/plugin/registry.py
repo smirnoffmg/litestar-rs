@@ -12,9 +12,11 @@ import inspect
 import time
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
+from functools import partial
 from typing import Any, overload
 from uuid import uuid4
 
+import anyio
 import msgspec
 from litestar.di import Provide
 from litestar.serialization import decode_json, encode_json, get_serializer
@@ -22,7 +24,12 @@ from litestar.types import TypeDecodersSequence, TypeEncodersMap
 
 from litestar_rs.core.envelope import Envelope, TaskResult
 from litestar_rs.core.errors import ConfigurationError
-from litestar_rs.core.protocols import Enqueuer, ResultStore, TaskHandler
+from litestar_rs.core.protocols import (
+    Enqueuer,
+    PayloadStore,
+    ResultStore,
+    TaskHandler,
+)
 from litestar_rs.plugin.di import DependencyPlan, plan_dependencies, resolved
 from litestar_rs.plugin.tracing import (
     TraceparentSource,
@@ -31,6 +38,8 @@ from litestar_rs.plugin.tracing import (
 )
 
 DEFAULT_QUEUE = "default"
+DEFAULT_THREAD_LIMIT = 20
+DEFAULT_OFFLOAD_OVER_BYTES = 128 * 1024
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,6 +52,8 @@ class BoundTask:
     payload_type: type[msgspec.Struct]
     payload_fields: tuple[str, ...]
     plan: DependencyPlan
+    is_async: bool
+    timeout_s: float | None
 
 
 class Task[**P]:
@@ -54,17 +65,25 @@ class Task[**P]:
     """
 
     def __init__(
-        self, registry: TaskRegistry, name: str, queue: str, function: Any
+        self,
+        registry: TaskRegistry,
+        name: str,
+        queue: str,
+        function: Any,
+        timeout_s: float | None = None,
     ) -> None:
         self.registry = registry
         self.name = name
         self.queue = queue
         self.function = function
+        self.timeout_s = timeout_s
         self.__doc__ = function.__doc__
         self.__name__ = getattr(function, "__name__", name)
 
-    async def __call__(self, *args: P.args, **kwargs: P.kwargs) -> None:
-        await self.function(*args, **kwargs)
+    async def __call__(self, *args: P.args, **kwargs: P.kwargs) -> Any:
+        if inspect.iscoroutinefunction(self.function):
+            return await self.function(*args, **kwargs)
+        return self.function(*args, **kwargs)
 
     async def enqueue(
         self,
@@ -92,30 +111,39 @@ class TaskRegistry:
         self._enqueuer: Enqueuer | None = None
         self._traceparent: TraceparentSource = no_traceparent
         self._results: ResultStore | None = None
+        self._payloads: PayloadStore | None = None
+        self._threads = anyio.CapacityLimiter(DEFAULT_THREAD_LIMIT)
+        self._offload_over_bytes = DEFAULT_OFFLOAD_OVER_BYTES
         self._serializer: Callable[[Any], Any] | None = None
         self._decoders: TypeDecodersSequence | None = None
 
     @overload
-    def task[**P](self, function: Callable[P, Awaitable[None]], /) -> Task[P]: ...
+    def task[**P](self, function: Callable[P, Any], /) -> Task[P]: ...
 
     @overload
     def task[**P](
-        self, /, *, name: str | None = None, queue: str = DEFAULT_QUEUE
-    ) -> Callable[[Callable[P, Awaitable[None]]], Task[P]]: ...
-
-    def task[**P](
         self,
-        function: Callable[P, Awaitable[None]] | None = None,
         /,
         *,
         name: str | None = None,
         queue: str = DEFAULT_QUEUE,
-    ) -> Task[P] | Callable[[Callable[P, Awaitable[None]]], Task[P]]:
-        def register(fn: Callable[P, Awaitable[None]]) -> Task[P]:
+        timeout_s: float | None = None,
+    ) -> Callable[[Callable[P, Any]], Task[P]]: ...
+
+    def task[**P](
+        self,
+        function: Callable[P, Any] | None = None,
+        /,
+        *,
+        name: str | None = None,
+        queue: str = DEFAULT_QUEUE,
+        timeout_s: float | None = None,
+    ) -> Task[P] | Callable[[Callable[P, Any]], Task[P]]:
+        def register(fn: Callable[P, Any]) -> Task[P]:
             task_name = name or fn.__name__
             if task_name in self._declared:
                 raise ConfigurationError(f"task {task_name!r} is registered twice")
-            declared = Task[P](self, task_name, queue, fn)
+            declared = Task[P](self, task_name, queue, fn, timeout_s)
             self._declared[task_name] = declared
             return declared
 
@@ -134,11 +162,17 @@ class TaskRegistry:
         type_decoders: TypeDecodersSequence | None = None,
         traceparent: TraceparentSource = no_traceparent,
         results: ResultStore | None = None,
+        payloads: PayloadStore | None = None,
+        thread_limit: int = DEFAULT_THREAD_LIMIT,
+        offload_over_bytes: int = DEFAULT_OFFLOAD_OVER_BYTES,
     ) -> None:
         """Settle every task against the application. Failures land here, on boot."""
         self._enqueuer = enqueuer
         self._traceparent = traceparent
         self._results = results
+        self._payloads = payloads
+        self._threads = anyio.CapacityLimiter(thread_limit)
+        self._offload_over_bytes = offload_over_bytes
         self._serializer = get_serializer(type_encoders)
         self._decoders = type_decoders
         self._bound = {
@@ -176,10 +210,17 @@ class TaskRegistry:
         except TypeError as exc:
             raise ConfigurationError(f"bad arguments for task {name!r}: {exc}") from exc
         job_id = uuid4().hex
+        encoded = encode_json(arguments, self._serializer)
+        reference: str | None = None
+        if len(encoded) > self._offload_over_bytes and self._payloads is not None:
+            # Redis keeps the stream in memory; a large payload belongs elsewhere.
+            reference = await self._payloads.put(job_id, encoded)
+            encoded = b""
         envelope = Envelope(
             id=job_id,
             task=name,
-            payload=encode_json(arguments, self._serializer),
+            payload=encoded,
+            payload_ref=reference,
             enqueued_at=time.time_ns() // 1_000_000,
             # Beside the payload, never inside it: restoring the span must not
             # require decoding a payload the worker may not understand.
@@ -190,17 +231,37 @@ class TaskRegistry:
         await self._enqueuer.enqueue(envelope, queue=task.queue)
         return job_id
 
-    async def execute(self, envelope: Envelope) -> None:
+    async def execute(self, envelope: Envelope) -> Any:
         """Run a task from its stream entry: decode, inject, call."""
         task = self.bound(envelope.task)
-        arguments = decode_json(envelope.payload, task.payload_type, self._decoders)
+        raw = envelope.payload
+        if envelope.payload_ref is not None:
+            if self._payloads is None:
+                raise ConfigurationError(
+                    f"job {envelope.id!r} carries a payload reference but this "
+                    "application has no payload store"
+                )
+            raw = await self._payloads.get(envelope.payload_ref)
+        arguments = decode_json(raw, task.payload_type, self._decoders)
         payload = {field: getattr(arguments, field) for field in task.payload_fields}
         token = current_traceparent.set(envelope.traceparent)
         try:
             async with resolved(task.plan) as injected:
-                await task.function(**payload, **injected)
+                return await self._call(task, {**payload, **injected})
         finally:
             current_traceparent.reset(token)
+
+    async def _call(self, task: BoundTask, arguments: dict[str, Any]) -> Any:
+        if not task.is_async:
+            # Off the event loop, under a limiter this project sizes itself: the
+            # asyncio default silently caps throughput and starves the heartbeat.
+            return await anyio.to_thread.run_sync(
+                partial(task.function, **arguments), limiter=self._threads
+            )
+        if task.timeout_s is None:
+            return await task.function(**arguments)
+        with anyio.fail_after(task.timeout_s):
+            return await task.function(**arguments)
 
     def handlers(self) -> dict[str, TaskHandler]:
         """What the worker dispatches on: one entry per bound task."""
@@ -227,6 +288,15 @@ def _bind(task: Task[Any], dependencies: Mapping[str, Provide]) -> BoundTask:
         else:
             fields.append((parameter.name, parameter.annotation, parameter.default))
 
+    is_async = inspect.iscoroutinefunction(task.function)
+    if task.timeout_s is not None and not is_async:
+        # asyncio.timeout cancels at the next await; a thread has none, and
+        # threads cannot be killed. Promising a timeout here would be a lie.
+        raise ConfigurationError(
+            f"task {task.name!r} is synchronous and cannot be given a timeout; "
+            "timeouts are guaranteed for async tasks only"
+        )
+
     return BoundTask(
         name=task.name,
         queue=task.queue,
@@ -234,4 +304,6 @@ def _bind(task: Task[Any], dependencies: Mapping[str, Provide]) -> BoundTask:
         payload_type=msgspec.defstruct(f"{task.name}_payload", fields),
         payload_fields=tuple(field[0] for field in fields),
         plan=plan_dependencies(injected, dependencies, task=task.name),
+        is_async=is_async,
+        timeout_s=task.timeout_s,
     )

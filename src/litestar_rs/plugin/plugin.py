@@ -82,6 +82,8 @@ class QueuePlugin(InitPlugin, CLIPlugin):
             type_decoders=app_config.type_decoders,
             traceparent=self.config.traceparent,
             results=self,
+            thread_limit=self.config.thread_limit,
+            offload_over_bytes=self.config.offload_over_bytes,
         )
         app_config.lifespan.append(self._lifespan)
         app_config.route_handlers.append(self._health_route())
