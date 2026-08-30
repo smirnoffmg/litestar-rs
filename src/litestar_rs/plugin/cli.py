@@ -67,6 +67,7 @@ def run_workers(
                 config.registry.handlers(),
                 config.worker,
                 scheduler=plugin.scheduler,
+                results=plugin.results,
                 cron=config.cron,
             )
 

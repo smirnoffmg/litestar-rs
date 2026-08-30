@@ -12,8 +12,9 @@ from litestar.di import Provide
 from litestar.plugins import CLIPlugin, InitPlugin
 from redis.asyncio import Redis
 
-from litestar_rs.core.envelope import Envelope
+from litestar_rs.core.envelope import Envelope, TaskResult
 from litestar_rs.core.errors import ConfigurationError
+from litestar_rs.core.results import RedisResultStore
 from litestar_rs.core.scheduler import RedisScheduler
 from litestar_rs.core.transport import RedisStreamsTransport
 from litestar_rs.plugin.config import QueueConfig
@@ -36,6 +37,7 @@ class QueuePlugin(InitPlugin, CLIPlugin):
         self.config = config
         self._transport: RedisStreamsTransport | None = None
         self._scheduler: RedisScheduler | None = None
+        self._results: RedisResultStore | None = None
 
     @property
     def transport(self) -> RedisStreamsTransport:
@@ -53,8 +55,24 @@ class QueuePlugin(InitPlugin, CLIPlugin):
             )
         return self._scheduler
 
+    @property
+    def results(self) -> RedisResultStore:
+        if self._results is None:
+            raise ConfigurationError(
+                "the queue is not connected yet; it opens with the application"
+            )
+        return self._results
+
     async def enqueue(self, envelope: Envelope, *, queue: str) -> bytes:
         return await self.transport.enqueue(envelope, queue=queue)
+
+    async def store(
+        self, job_id: str, result: TaskResult, *, ttl_ms: int | None = None
+    ) -> None:
+        await self.results.store(job_id, result, ttl_ms=ttl_ms)
+
+    async def get(self, job_id: str) -> TaskResult | None:
+        return await self.results.get(job_id)
 
     def on_app_init(self, app_config: AppConfig) -> AppConfig:
         self.config.registry.bind(
@@ -63,6 +81,7 @@ class QueuePlugin(InitPlugin, CLIPlugin):
             type_encoders=app_config.type_encoders,
             type_decoders=app_config.type_decoders,
             traceparent=self.config.traceparent,
+            results=self,
         )
         app_config.lifespan.append(self._lifespan)
         app_config.route_handlers.append(self._health_route())
@@ -107,11 +126,17 @@ class QueuePlugin(InitPlugin, CLIPlugin):
             self._scheduler = RedisScheduler(
                 control=control, namespace=config.namespace, shards=config.shards
             )
+            self._results = RedisResultStore(
+                control=control,
+                namespace=config.namespace,
+                default_ttl_ms=config.result_ttl_ms,
+            )
             await self._transport.ensure_group()
             yield
         finally:
             self._transport = None
             self._scheduler = None
+            self._results = None
             await reader.aclose()
             await control.aclose()
 

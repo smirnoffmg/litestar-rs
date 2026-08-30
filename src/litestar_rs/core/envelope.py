@@ -1,4 +1,4 @@
-"""The stream entry layout.
+"""The wire types: what a job looks like in Redis, and what it leaves behind.
 
 A stream entry is a flat hash. ``traceparent`` sits beside ``payload`` rather than
 inside it, so restoring the span context never requires decoding the payload — and
@@ -30,6 +30,8 @@ class Envelope(msgspec.Struct, frozen=True, kw_only=True):
     tracestate: str | None = None
     dedup: str | None = None
     """Application-chosen key. At most one job per key runs within its window."""
+    result_ttl_ms: int | None = None
+    """Keep the outcome for this long. Absent means nobody is waiting for it."""
     history: tuple[str, ...] = ()
     """One compact line per failed attempt, oldest first.
 
@@ -63,6 +65,8 @@ def to_fields(envelope: Envelope) -> dict[bytes, bytes]:
         b"tracestate": envelope.tracestate,
         b"dedup": envelope.dedup,
     }
+    if envelope.result_ttl_ms is not None:
+        fields[b"result_ttl_ms"] = str(envelope.result_ttl_ms).encode()
     # Redis has no null: an unset field is written as no field at all.
     fields.update({k: v.encode() for k, v in optional.items() if v is not None})
     if envelope.history:
@@ -91,8 +95,10 @@ def from_fields(fields: Mapping[bytes, bytes]) -> Envelope:
     }
     # Unknown fields are ignored on purpose: a newer producer must not break an
     # older worker during a rolling deploy.
+    raw_ttl = fields.get(b"result_ttl_ms")
     raw_history = fields.get(b"history")
     return Envelope(
+        result_ttl_ms=int(raw_ttl) if raw_ttl is not None else None,
         history=tuple(raw_history.decode().split("\n")) if raw_history else (),
         id=fields[b"id"].decode(),
         task=fields[b"task"].decode(),
@@ -122,3 +128,11 @@ class Pending(msgspec.Struct, frozen=True):
     entry_id: bytes
     consumer: str
     times_delivered: int
+
+
+class TaskResult(msgspec.Struct, frozen=True):
+    """What a finished job left behind, for whoever asked to be told."""
+
+    ok: bool
+    value: bytes = b""
+    error: str = ""

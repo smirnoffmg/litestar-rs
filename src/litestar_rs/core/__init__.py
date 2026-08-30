@@ -7,6 +7,7 @@ from litestar_rs.core.envelope import (
     JsonCodec,
     Pending,
     Record,
+    TaskResult,
     from_fields,
     to_fields,
 )
@@ -19,11 +20,13 @@ from litestar_rs.core.errors import (
 from litestar_rs.core.protocols import (
     Codec,
     Enqueuer,
+    ResultStore,
     Scheduler,
     Sleeper,
     StreamTransport,
     TaskHandler,
 )
+from litestar_rs.core.results import RedisResultStore
 from litestar_rs.core.retry import RetryPolicy
 from litestar_rs.core.scheduler import RedisScheduler
 from litestar_rs.core.testing import (
@@ -50,13 +53,16 @@ __all__ = [
     "PayloadTooLarge",
     "Pending",
     "Record",
+    "RedisResultStore",
     "RedisScheduler",
     "RedisStreamsTransport",
+    "ResultStore",
     "RetryPolicy",
     "Scheduler",
     "Sleeper",
     "StreamTransport",
     "TaskHandler",
+    "TaskResult",
     "UnknownTask",
     "WorkerConfig",
     "from_fields",

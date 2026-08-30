@@ -117,7 +117,7 @@ containers = ["litestar_rs.core"]
 layers = [
     "testing",
     "worker",
-    "transport : scheduler",
+    "transport : scheduler : results",
     "scripts",
     "protocols",
     "cron : retry",
@@ -125,9 +125,11 @@ layers = [
     "errors",
 ]
 
-# `results` joins this contract with the result-backend milestone; import-linter
-# fails on a contract naming a module that does not exist yet.
 [[tool.importlinter.contracts]]
 name = "Subsystems meet only through protocols"
 type = "independence"
-modules = ["litestar_rs.core.transport", "litestar_rs.core.scheduler"]
+modules = [
+    "litestar_rs.core.transport",
+    "litestar_rs.core.scheduler",
+    "litestar_rs.core.results",
+]

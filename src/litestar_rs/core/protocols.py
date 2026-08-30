@@ -4,7 +4,7 @@ from collections.abc import Awaitable, Callable, Iterable, Sequence
 from typing import Protocol
 
 from litestar_rs.core.cron import CronJob
-from litestar_rs.core.envelope import Envelope, Pending, Record
+from litestar_rs.core.envelope import Envelope, Pending, Record, TaskResult
 
 
 class Codec(Protocol):
@@ -78,7 +78,16 @@ class Scheduler(Protocol):
 
 
 class TaskHandler(Protocol):
-    async def __call__(self, envelope: Envelope, /) -> None: ...
+    async def __call__(self, envelope: Envelope, /) -> object: ...
+
+
+class ResultStore(Protocol):
+    """Where a job's outcome goes when somebody is waiting for one."""
+
+    async def store(
+        self, job_id: str, result: TaskResult, *, ttl_ms: int | None = None
+    ) -> None: ...
+    async def get(self, job_id: str) -> TaskResult | None: ...
 
 
 type Sleeper = Callable[[float], Awaitable[None]]

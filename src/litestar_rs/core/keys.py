@@ -67,5 +67,13 @@ def leader_key(namespace: str) -> str:
     return f"{{{namespace}}}:leader"
 
 
+def result_key(namespace: str, job_id: str) -> str:
+    return f"{{{namespace}}}:result:{job_id}"
+
+
+def result_wait_key(namespace: str, job_id: str) -> str:
+    return f"{{{namespace}}}:result:wait:{job_id}"
+
+
 def dlq_key(namespace: str) -> str:
     return f"{{{namespace}}}:dlq"

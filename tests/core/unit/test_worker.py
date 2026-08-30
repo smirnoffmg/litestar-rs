@@ -11,7 +11,13 @@ import anyio
 import pytest
 
 from litestar_rs.core.cron import CronJob
-from litestar_rs.core.envelope import Envelope, Pending, Record, to_fields
+from litestar_rs.core.envelope import (
+    Envelope,
+    Pending,
+    Record,
+    TaskResult,
+    to_fields,
+)
 from litestar_rs.core.errors import ConfigurationError
 from litestar_rs.core.retry import RetryPolicy
 from litestar_rs.core.worker import (
@@ -296,6 +302,7 @@ async def test_successful_handler_acks_and_frees_the_slot() -> None:
     await _run_one(
         transport,
         FakeScheduler(),
+        None,
         {"reindex": handler},
         slots,
         WorkerConfig(),
@@ -320,6 +327,7 @@ async def test_a_failing_task_is_rescheduled_with_backoff() -> None:
     await _run_one(
         transport,
         scheduler,
+        None,
         {"reindex": handler},
         slots,
         WorkerConfig(),
@@ -347,7 +355,7 @@ async def test_a_task_out_of_attempts_is_buried() -> None:
         raise RuntimeError("boom")
 
     cfg = WorkerConfig(retry=RetryPolicy(max_attempts=3))
-    await _run_one(transport, scheduler, {"reindex": handler}, slots, cfg, spent)
+    await _run_one(transport, scheduler, None, {"reindex": handler}, slots, cfg, spent)
 
     [(entry_id, reason, detail)] = transport.buried
     assert entry_id == b"1-0"
@@ -367,6 +375,7 @@ async def test_unknown_task_is_deferred_rather_than_acked_away() -> None:
     await _run_one(
         transport,
         scheduler,
+        None,
         {},
         slots,
         WorkerConfig(),
@@ -390,7 +399,7 @@ async def test_a_task_unknown_for_too_long_is_buried() -> None:
     stale.fields[b"enqueued_at"] = str(scheduler.now - 86_400_000).encode()
 
     cfg = WorkerConfig(retry=RetryPolicy(unknown_task_timeout_ms=3_600_000))
-    await _run_one(transport, scheduler, {}, slots, cfg, stale)
+    await _run_one(transport, scheduler, None, {}, slots, cfg, stale)
 
     [(_, reason, detail)] = transport.buried
     assert reason == "unknown_task"
@@ -428,6 +437,7 @@ async def test_a_handler_that_never_returns_keeps_being_refreshed() -> None:
                 _run_one,
                 transport,
                 FakeScheduler(),
+                None,
                 {"reindex": never_returns},
                 slots,
                 config,
@@ -522,7 +532,7 @@ async def test_an_undecodable_entry_is_buried_immediately() -> None:
     slots.take([b"1-0"])
     broken = Record(stream="s", entry_id=b"1-0", fields={b"v": b"1"})
 
-    await _run_one(transport, FakeScheduler(), {}, slots, WorkerConfig(), broken)
+    await _run_one(transport, FakeScheduler(), None, {}, slots, WorkerConfig(), broken)
 
     [(entry_id, reason, _)] = transport.buried
     assert entry_id == b"1-0"
@@ -677,7 +687,13 @@ async def test_a_job_whose_dedup_key_is_taken_is_skipped_not_failed() -> None:
     guarded.fields[b"dedup"] = b"invoice-42"
 
     await _run_one(
-        transport, FakeScheduler(), {"reindex": handler}, slots, WorkerConfig(), guarded
+        transport,
+        FakeScheduler(),
+        None,
+        {"reindex": handler},
+        slots,
+        WorkerConfig(),
+        guarded,
     )
 
     assert ran == []
@@ -697,6 +713,7 @@ async def test_a_job_without_a_dedup_key_is_not_gated() -> None:
     await _run_one(
         transport,
         FakeScheduler(),
+        None,
         {"reindex": handler},
         slots,
         WorkerConfig(),
@@ -705,3 +722,114 @@ async def test_a_job_without_a_dedup_key_is_not_gated() -> None:
 
     assert ran == ["1-0"]
     assert transport.dedup_claims == []
+
+
+class FakeResults:
+    def __init__(self) -> None:
+        self.stored: list[tuple[str, TaskResult, int | None]] = []
+
+    async def store(
+        self, job_id: str, result: TaskResult, *, ttl_ms: int | None = None
+    ) -> None:
+        self.stored.append((job_id, result, ttl_ms))
+
+    async def get(self, job_id: str) -> TaskResult | None:
+        return next((r for jid, r, _ in self.stored if jid == job_id), None)
+
+
+def wants_result(entry_id: bytes, ttl_ms: int = 60_000) -> Record:
+    entry = record(entry_id)
+    entry.fields[b"result_ttl_ms"] = str(ttl_ms).encode()
+    return entry
+
+
+async def test_a_result_is_kept_only_when_someone_asked_for_one() -> None:
+    """Most work is enqueued and forgotten; a key each would be spent on nobody."""
+    results = FakeResults()
+    slots = Slots()
+    slots.take([b"1-0"])
+
+    async def handler(envelope: Envelope) -> bytes:
+        return b"done"
+
+    await _run_one(
+        FakeTransport(),
+        FakeScheduler(),
+        results,
+        {"reindex": handler},
+        slots,
+        WorkerConfig(),
+        record(b"1-0"),
+    )
+
+    assert results.stored == []
+
+
+async def test_a_requested_result_is_kept_with_its_ttl() -> None:
+    results = FakeResults()
+    slots = Slots()
+    slots.take([b"1-0"])
+
+    async def handler(envelope: Envelope) -> bytes:
+        return b"done"
+
+    await _run_one(
+        FakeTransport(),
+        FakeScheduler(),
+        results,
+        {"reindex": handler},
+        slots,
+        WorkerConfig(),
+        wants_result(b"1-0", ttl_ms=1234),
+    )
+
+    assert results.stored == [("1-0", TaskResult(ok=True, value=b"done"), 1234)]
+
+
+async def test_a_buried_job_records_its_failure_for_the_waiter() -> None:
+    """Otherwise a caller waiting on a dead job blocks until its own timeout."""
+    results = FakeResults()
+    slots = Slots()
+    slots.take([b"1-0"])
+
+    async def handler(envelope: Envelope) -> None:
+        raise RuntimeError("boom")
+
+    cfg = WorkerConfig(retry=RetryPolicy(max_attempts=1))
+    await _run_one(
+        FakeTransport(),
+        FakeScheduler(),
+        results,
+        {"reindex": handler},
+        slots,
+        cfg,
+        wants_result(b"1-0"),
+    )
+
+    [(job_id, result, _)] = results.stored
+    assert job_id == "1-0"
+    assert result.ok is False
+    assert "RuntimeError: boom" in result.error
+
+
+async def test_a_retry_does_not_record_a_result_yet() -> None:
+    """The job is not over; a waiter must keep waiting."""
+    results = FakeResults()
+    slots = Slots()
+    slots.take([b"1-0"])
+
+    async def handler(envelope: Envelope) -> None:
+        raise RuntimeError("boom")
+
+    cfg = WorkerConfig(retry=RetryPolicy(max_attempts=5))
+    await _run_one(
+        FakeTransport(),
+        FakeScheduler(),
+        results,
+        {"reindex": handler},
+        slots,
+        cfg,
+        wants_result(b"1-0"),
+    )
+
+    assert results.stored == []

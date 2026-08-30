@@ -18,9 +18,10 @@ import anyio
 from msgspec import structs
 
 from litestar_rs.core.cron import CronJob
-from litestar_rs.core.envelope import Envelope, Record, from_fields
+from litestar_rs.core.envelope import Envelope, Record, TaskResult, from_fields
 from litestar_rs.core.errors import ConfigurationError, MalformedEnvelope
 from litestar_rs.core.protocols import (
+    ResultStore,
     Scheduler,
     Sleeper,
     StreamTransport,
@@ -128,6 +129,7 @@ async def run(
     config: WorkerConfig | None = None,
     *,
     scheduler: Scheduler,
+    results: ResultStore | None = None,
     sleep: Sleeper = anyio.sleep,
     shutdown: anyio.Event | None = None,
     cron: Sequence[CronJob] = (),
@@ -150,7 +152,14 @@ async def run(
 
             def spawn(record: Record) -> None:
                 handlers.start_soon(
-                    _run_one, transport, scheduler, registry, slots, cfg, record
+                    _run_one,
+                    transport,
+                    scheduler,
+                    results,
+                    registry,
+                    slots,
+                    cfg,
+                    record,
                 )
 
             async def reclaim() -> None:
@@ -211,6 +220,7 @@ async def _consume_loop(
 async def _run_one(
     transport: StreamTransport,
     scheduler: Scheduler,
+    results: ResultStore | None,
     registry: Mapping[str, TaskHandler],
     slots: Slots,
     cfg: WorkerConfig,
@@ -234,7 +244,10 @@ async def _run_one(
             await transport.ack(record.stream, [record.entry_id])
             return
 
-        await handler(envelope)
+        value = await handler(envelope)
+        await _keep_result(
+            results, envelope, TaskResult(ok=True, value=_encoded(value))
+        )
         await transport.ack(record.stream, [record.entry_id])
     except anyio.get_cancelled_exc_class():
         # Cancelled by shutdown: not an application failure. The entry stays in
@@ -244,9 +257,22 @@ async def _run_one(
         raise
     except Exception as exc:
         logger.exception("task from entry %r failed", record.entry_id)
-        await _retry_or_bury(transport, scheduler, cfg, record, exc)
+        await _retry_or_bury(transport, scheduler, results, cfg, record, exc)
     finally:
         slots.release(record.entry_id)
+
+
+def _encoded(value: object) -> bytes:
+    """Only bytes travel as a result; anything else is the plugin's business."""
+    return value if isinstance(value, bytes) else b""
+
+
+async def _keep_result(
+    results: ResultStore | None, envelope: Envelope, result: TaskResult
+) -> None:
+    if results is None or envelope.result_ttl_ms is None:
+        return
+    await results.store(envelope.id, result, ttl_ms=envelope.result_ttl_ms)
 
 
 async def _may_run(
@@ -270,6 +296,7 @@ async def _may_run(
 async def _retry_or_bury(
     transport: StreamTransport,
     scheduler: Scheduler,
+    results: ResultStore | None,
     cfg: WorkerConfig,
     record: Record,
     exc: BaseException,
@@ -277,6 +304,12 @@ async def _retry_or_bury(
     envelope = from_fields(record.fields)
     attempt = envelope.attempt + 1
     if cfg.retry.exhausted(attempt):
+        # A waiter must be told the job is over, not left blocking until timeout.
+        await _keep_result(
+            results,
+            envelope,
+            TaskResult(ok=False, error=f"{type(exc).__name__}: {exc}"),
+        )
         await _dead_letter(transport, record, reason="max_attempts", error=exc)
         return
 
@@ -479,6 +512,7 @@ async def run_with_signals(
     config: WorkerConfig | None = None,
     *,
     scheduler: Scheduler,
+    results: ResultStore | None = None,
     cron: Sequence[CronJob] = (),
 ) -> None:
     """Run until SIGTERM or SIGINT; a second signal means now, not soon."""
@@ -490,6 +524,7 @@ async def run_with_signals(
             registry,
             config,
             scheduler=scheduler,
+            results=results,
             cron=cron,
             shutdown=stop,
         )

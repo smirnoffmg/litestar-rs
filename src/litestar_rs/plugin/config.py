@@ -32,6 +32,7 @@ class QueueConfig:
     worker: WorkerConfig = field(default_factory=WorkerConfig)
     cron: Sequence[CronJob] = ()
     health_path: str = "/health/queue"
+    result_ttl_ms: int = 3_600_000
     traceparent: TraceparentSource = no_traceparent
     """Supplies the current W3C traceparent, so a task can join the request's trace."""
 

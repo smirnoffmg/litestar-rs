@@ -20,9 +20,9 @@ from litestar.di import Provide
 from litestar.serialization import decode_json, encode_json, get_serializer
 from litestar.types import TypeDecodersSequence, TypeEncodersMap
 
-from litestar_rs.core.envelope import Envelope
+from litestar_rs.core.envelope import Envelope, TaskResult
 from litestar_rs.core.errors import ConfigurationError
-from litestar_rs.core.protocols import Enqueuer, TaskHandler
+from litestar_rs.core.protocols import Enqueuer, ResultStore, TaskHandler
 from litestar_rs.plugin.di import DependencyPlan, plan_dependencies, resolved
 from litestar_rs.plugin.tracing import (
     TraceparentSource,
@@ -66,8 +66,21 @@ class Task[**P]:
     async def __call__(self, *args: P.args, **kwargs: P.kwargs) -> None:
         await self.function(*args, **kwargs)
 
-    async def enqueue(self, **payload: Any) -> bytes:
-        return await self.registry.enqueue(self.name, payload)
+    async def enqueue(
+        self,
+        *,
+        result_ttl_ms: int | None = None,
+        dedup: str | None = None,
+        **payload: Any,
+    ) -> str:
+        """Queue the task and hand back its job id.
+
+        The id is what a result is looked up by, so it is returned even when
+        nobody asked for one.
+        """
+        return await self.registry.enqueue(
+            self.name, payload, result_ttl_ms=result_ttl_ms, dedup=dedup
+        )
 
 
 class TaskRegistry:
@@ -78,6 +91,7 @@ class TaskRegistry:
         self._bound: dict[str, BoundTask] = {}
         self._enqueuer: Enqueuer | None = None
         self._traceparent: TraceparentSource = no_traceparent
+        self._results: ResultStore | None = None
         self._serializer: Callable[[Any], Any] | None = None
         self._decoders: TypeDecodersSequence | None = None
 
@@ -119,10 +133,12 @@ class TaskRegistry:
         type_encoders: TypeEncodersMap | None = None,
         type_decoders: TypeDecodersSequence | None = None,
         traceparent: TraceparentSource = no_traceparent,
+        results: ResultStore | None = None,
     ) -> None:
         """Settle every task against the application. Failures land here, on boot."""
         self._enqueuer = enqueuer
         self._traceparent = traceparent
+        self._results = results
         self._serializer = get_serializer(type_encoders)
         self._decoders = type_decoders
         self._bound = {
@@ -137,7 +153,19 @@ class TaskRegistry:
             )
         return task
 
-    async def enqueue(self, name: str, payload: Mapping[str, Any]) -> bytes:
+    async def result(self, job_id: str) -> TaskResult | None:
+        if self._results is None:
+            raise ConfigurationError("this application has no result store configured")
+        return await self._results.get(job_id)
+
+    async def enqueue(
+        self,
+        name: str,
+        payload: Mapping[str, Any],
+        *,
+        result_ttl_ms: int | None = None,
+        dedup: str | None = None,
+    ) -> str:
         task = self.bound(name)
         if self._enqueuer is None:  # pragma: no cover - bind() always sets it
             raise ConfigurationError("registry has no enqueuer")
@@ -147,16 +175,20 @@ class TaskRegistry:
             arguments = task.payload_type(**payload)
         except TypeError as exc:
             raise ConfigurationError(f"bad arguments for task {name!r}: {exc}") from exc
+        job_id = uuid4().hex
         envelope = Envelope(
-            id=uuid4().hex,
+            id=job_id,
             task=name,
             payload=encode_json(arguments, self._serializer),
             enqueued_at=time.time_ns() // 1_000_000,
             # Beside the payload, never inside it: restoring the span must not
             # require decoding a payload the worker may not understand.
             traceparent=self._traceparent(),
+            result_ttl_ms=result_ttl_ms,
+            dedup=dedup,
         )
-        return await self._enqueuer.enqueue(envelope, queue=task.queue)
+        await self._enqueuer.enqueue(envelope, queue=task.queue)
+        return job_id
 
     async def execute(self, envelope: Envelope) -> None:
         """Run a task from its stream entry: decode, inject, call."""
