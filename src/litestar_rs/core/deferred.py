@@ -13,7 +13,7 @@ that must survive that crash needs an outbox in the same database.
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
 
@@ -67,7 +67,7 @@ class DeferredEnqueuer:
         self._pending.clear()
 
     @asynccontextmanager
-    async def active(self) -> AsyncIterator[DeferredEnqueuer]:
+    async def active(self) -> AsyncGenerator[DeferredEnqueuer]:
         """Route every enqueue in this block through the buffer.
 
         Binding only. Whether the block ends in ``flush`` or ``discard`` is the

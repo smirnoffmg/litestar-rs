@@ -97,13 +97,37 @@ See [Priorities](priorities.md) for how a worker reads several queues.
 
 ## Large arguments
 
-Above `QueueConfig.offload_over_bytes` the encoded payload goes to the
-application's `PayloadStore` and the record carries a reference instead:
+Above `QueueConfig.offload_over_bytes` the encoded payload goes to a
+`PayloadStore` and the record carries a reference instead. One ships:
+
+```python
+from litestar_rs import FilePayloadStore
+
+payloads = FilePayloadStore("/mnt/queue-payloads")
+```
+
+Every worker must see the same directory — a network volume, or a single host.
+A path local to one pod means the job runs wherever the file happens to be and
+fails everywhere else; reading a reference from the wrong place raises
+`PayloadMissing` saying so rather than failing obscurely.
+
+Anything else is two methods:
 
 ```python
 class S3Payloads:
-    async def put(self, job_id: str, data: bytes) -> str: ...
-    async def get(self, reference: str) -> bytes: ...
+    def __init__(self, client, bucket: str) -> None:
+        self.client, self.bucket = client, bucket
+
+    async def put(self, job_id: str, data: bytes) -> str:
+        key = f"payloads/{job_id}"
+        await self.client.put_object(Bucket=self.bucket, Key=key, Body=data)
+        return f"s3://{self.bucket}/{key}"
+
+    async def get(self, reference: str) -> bytes:
+        _, _, rest = reference.partition("s3://")
+        bucket, _, key = rest.partition("/")
+        response = await self.client.get_object(Bucket=bucket, Key=key)
+        return await response["Body"].read()
 ```
 
 Without a store configured, the transport's own limit refuses an oversized

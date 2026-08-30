@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
@@ -98,12 +98,12 @@ class QueuePlugin(InitPlugin, CLIPlugin):
         cli.add_command(workers)
 
     @asynccontextmanager
-    async def _lifespan(self, app: Litestar) -> AsyncIterator[None]:
+    async def _lifespan(self, app: Litestar) -> AsyncGenerator[None]:
         async with self.connected():
             yield
 
     @asynccontextmanager
-    async def connected(self, *, consumer: str | None = None) -> AsyncIterator[None]:
+    async def connected(self, *, consumer: str | None = None) -> AsyncGenerator[None]:
         """Open the queue's connections for the duration of the block.
 
         Used by the application lifespan and by the worker command alike, so a

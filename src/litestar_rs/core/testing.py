@@ -4,7 +4,7 @@ A queue that is hard to test is a queue people work around. These are part of
 the library rather than an appendix in the docs for exactly that reason.
 """
 
-from collections.abc import AsyncIterator, Mapping, Sequence
+from collections.abc import AsyncGenerator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from functools import partial
 
@@ -79,7 +79,7 @@ async def worker_running(
     *,
     scheduler: Scheduler,
     cron: Sequence[CronJob] = (),
-) -> AsyncIterator[None]:
+) -> AsyncGenerator[None]:
     """Run a real worker for the duration of the block, then stop it cleanly.
 
     Wrap it in a fixture for integration tests: leaving the block asks the worker

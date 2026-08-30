@@ -22,7 +22,6 @@ from typing import Any
 from redis.asyncio import Redis, RedisCluster
 from redis.asyncio.sentinel import Sentinel
 from testcontainers.core.container import DockerContainer
-from testcontainers.core.waiting_utils import wait_for_logs
 
 CLUSTER_PORTS = (7310, 7311, 7312)
 MASTER_PORT = 7400
@@ -51,6 +50,8 @@ class Topology:
 
     name: str
     make_client: Any
+    container: DockerContainer | None = None
+    """Set for topologies a test needs to reconfigure, such as resharding."""
 
     def clients(self) -> tuple[Any, Any]:
         return self.make_client(socket_timeout=30.0), self.make_client()
@@ -91,7 +92,7 @@ def cluster_container() -> Iterator[Topology]:
                 f"redis://127.0.0.1:{CLUSTER_PORTS[0]}", **kwargs
             )
 
-        yield Topology(name="cluster", make_client=make)
+        yield Topology(name="cluster", make_client=make, container=container)
 
 
 def run_in(container: DockerContainer, command: list[str]) -> str:
@@ -113,6 +114,17 @@ def wait_for_ping(container: DockerContainer, port: int) -> None:
             pass
         time.sleep(0.5)
     raise RuntimeError(f"redis on port {port} never answered")
+
+
+def wait_for_sentinel_master(container: DockerContainer) -> None:
+    for _ in range(60):
+        masters = run_in(
+            container, ["redis-cli", "-p", str(SENTINEL_PORT), "sentinel", "masters"]
+        )
+        if MASTER_NAME in masters:
+            return
+        time.sleep(0.5)
+    raise RuntimeError(f"sentinel never picked up {MASTER_NAME}")
 
 
 def wait_for_cluster_ready(container: DockerContainer) -> None:
@@ -146,7 +158,10 @@ def sentinel_container() -> Iterator[Topology]:
         .with_bind_ports(SENTINEL_PORT, SENTINEL_PORT)
     )
     with container:
-        wait_for_logs(container, "monitor master", timeout=60)
+        # Asked rather than read off the logs: the servers are daemonized and a
+        # log predicate is deprecated in testcontainers anyway.
+        wait_for_ping(container, SENTINEL_PORT)
+        wait_for_sentinel_master(container)
 
         def make(**kwargs: Any) -> Any:
             return new_sentinel().master_for(MASTER_NAME, **kwargs)
@@ -159,3 +174,52 @@ def standalone(url: str) -> Topology:
         return Redis.from_url(url, **kwargs)
 
     return Topology(name="standalone", make_client=make)
+
+
+def node_id(container: DockerContainer, port: int) -> str:
+    return run_in(container, ["redis-cli", "-p", str(port), "cluster", "myid"]).strip()
+
+
+def slot_owner(container: DockerContainer, slot: int) -> int:
+    """Which of our ports currently serves this slot."""
+    nodes = run_in(
+        container, ["redis-cli", "-p", str(CLUSTER_PORTS[0]), "cluster", "nodes"]
+    )
+    for line in nodes.splitlines():
+        fields = line.split()
+        port = int(fields[1].split("@")[0].rsplit(":", 1)[1])
+        for held in fields[8:]:
+            start, _, end = held.partition("-")
+            if not start.isdigit():
+                continue
+            if int(start) <= slot <= int(end or start):
+                return port
+    raise RuntimeError(f"nobody owns slot {slot}")
+
+
+def move_slot(container: DockerContainer, slot: int) -> tuple[int, int]:
+    """Migrate one slot to another node, the way redis-cli reshard does.
+
+    Returns the ports it moved between. Keys travel with the slot, and clients
+    are redirected mid-flight -- which is the point of doing this under load.
+    """
+    source = slot_owner(container, slot)
+    target = next(port for port in CLUSTER_PORTS if port != source)
+    source_id, target_id = node_id(container, source), node_id(container, target)
+
+    def cli(port: int, *args: str) -> str:
+        return run_in(container, ["redis-cli", "-p", str(port), *args])
+
+    cli(target, "cluster", "setslot", str(slot), "importing", source_id)
+    cli(source, "cluster", "setslot", str(slot), "migrating", target_id)
+
+    while True:
+        keys = cli(source, "cluster", "getkeysinslot", str(slot), "100").split()
+        if not keys:
+            break
+        cli(source, "migrate", "127.0.0.1", str(target), "", "0", "5000", "keys", *keys)
+
+    # Every node must learn the new owner, or some of them keep redirecting back.
+    for port in CLUSTER_PORTS:
+        cli(port, "cluster", "setslot", str(slot), "node", target_id)
+    return source, target

@@ -116,5 +116,10 @@ Standalone, Sentinel and Cluster are all covered by the test suite. Cluster is
 why every key of a namespace carries the same hash tag; if you shard by
 namespace, each namespace occupies its own slot.
 
+Because a namespace lives in one slot, resharding moves the entire queue —
+stream, liveness keys, scheduler ZSET and all — in a single migration. A worker
+consuming through one is covered too: the test moves the slot under an in-flight
+job and asserts the worker follows.
+
 Cluster and Sentinel are alternative high-availability models — Cluster does its
 own failover and does not use Sentinel — so there is no deployment running both.

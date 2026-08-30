@@ -11,7 +11,7 @@ to be entered and torn down.
 """
 
 import inspect
-from collections.abc import AsyncIterator, Callable, Iterable, Mapping
+from collections.abc import AsyncGenerator, Callable, Iterable, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Any
@@ -105,7 +105,7 @@ def plan_dependencies(
 
 
 @asynccontextmanager
-async def resolved(plan: DependencyPlan) -> AsyncIterator[dict[str, Any]]:
+async def resolved(plan: DependencyPlan) -> AsyncGenerator[dict[str, Any]]:
     """Resolve the plan, hand over the values, and tear generators down after.
 
     Teardown runs in reverse, so a provider always closes before whatever it was

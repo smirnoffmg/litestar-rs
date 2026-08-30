@@ -85,7 +85,15 @@ mypy_path = ["src"]
 warn_return_any = true
 warn_unused_ignores = true
 disallow_untyped_defs = true
-enable_error_code = ["ignore-without-code", "redundant-expr", "truthy-bool"]
+# `deprecated` catches PEP 702 deprecations -- such as annotating an
+# @asynccontextmanager function as returning AsyncIterator -- which an editor
+# would otherwise be the only thing to notice.
+enable_error_code = [
+    "ignore-without-code",
+    "redundant-expr",
+    "truthy-bool",
+    "deprecated",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -147,7 +155,7 @@ containers = ["litestar_rs.core"]
 layers = [
     "testing",
     "worker : deferred",
-    "transport : scheduler : results",
+    "transport : scheduler : results : payloads",
     "scripts",
     "protocols",
     "cron : retry : clients : stats",
@@ -162,4 +170,5 @@ modules = [
     "litestar_rs.core.transport",
     "litestar_rs.core.scheduler",
     "litestar_rs.core.results",
+    "litestar_rs.core.payloads",
 ]

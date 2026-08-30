@@ -18,6 +18,7 @@ from litestar_rs.core.errors import (
     MalformedEnvelope,
     PayloadTooLarge,
 )
+from litestar_rs.core.payloads import FilePayloadStore, PayloadMissing
 from litestar_rs.core.protocols import (
     BrokerHandler,
     Codec,
@@ -53,9 +54,11 @@ __all__ = [
     "EagerEnqueuer",
     "Enqueuer",
     "Envelope",
+    "FilePayloadStore",
     "JsonCodec",
     "LitestarRsError",
     "MalformedEnvelope",
+    "PayloadMissing",
     "PayloadStore",
     "PayloadTooLarge",
     "Pending",

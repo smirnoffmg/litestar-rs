@@ -193,6 +193,8 @@ Mandatory, written with the code rather than after it:
 - the whole multi-key surface against Redis Cluster: reads across streams, both
   Lua scripts, the ZSET promotion
 - `SENTINEL FAILOVER` under an in-flight job: the worker survives the promotion
+- a cluster slot carrying the whole namespace moves under an in-flight job: the
+  worker follows it
 - a failing task comes back with `attempt` raised rather than looping forever
 - a task out of attempts lands in the DLQ with its payload, reason, traceback and
   history

@@ -13,7 +13,7 @@ that crash needs an outbox in the same database.
 from __future__ import annotations
 
 import os
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from uuid import UUID, uuid4
 
@@ -33,7 +33,7 @@ async def reindex(doc_id: UUID) -> None:
 
 
 @asynccontextmanager
-async def unit_of_work(plugin: QueuePlugin) -> AsyncIterator[DeferredEnqueuer]:
+async def unit_of_work(plugin: QueuePlugin) -> AsyncGenerator[DeferredEnqueuer]:
     """Hold the jobs until the transaction commits, and drop them if it does not.
 
     `active()` binds the buffer for the block, so ordinary `task.enqueue(...)`

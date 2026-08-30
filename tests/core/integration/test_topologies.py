@@ -21,8 +21,10 @@ from tests.core.integration.topologies import (
     SENTINEL_PORT,
     Topology,
     cluster_container,
+    move_slot,
     new_sentinel,
     sentinel_container,
+    slot_owner,
     standalone,
 )
 
@@ -221,6 +223,70 @@ async def test_a_worker_survives_a_sentinel_failover_with_work_in_flight(
                 await after_failover.wait()
 
         assert "after" in ran, "the worker went quiet after the failover"
+    finally:
+        await reader.aclose()
+        await control.aclose()
+
+
+async def test_a_worker_follows_a_slot_that_moves_under_it(cluster: Topology) -> None:
+    """Resharding while jobs are in flight.
+
+    A namespace lives in one slot, so moving that slot moves the entire queue --
+    stream, liveness keys, the scheduler ZSET and all -- to another node while a
+    worker is consuming from it.
+    """
+    from redis.crc import key_slot
+
+    from litestar_rs.core.testing import worker_running
+    from litestar_rs.core.worker import WorkerConfig
+
+    assert cluster.container is not None
+    namespace = f"t{uuid4().hex[:8]}"
+    slot = key_slot(f"{{{namespace}}}".encode())
+    reader, control = cluster.clients()
+    done: list[str] = []
+    before = anyio.Event()
+    after = anyio.Event()
+
+    async def handler(env: Envelope) -> None:
+        done.append(env.id)
+        (before if env.id == "before" else after).set()
+
+    try:
+        transport = RedisStreamsTransport(
+            reader=reader,
+            control=control,
+            consumer="worker-1",
+            namespace=namespace,
+            block_ms=100,
+        )
+        scheduler = RedisScheduler(control=control, namespace=namespace)
+        await transport.ensure_group()
+        await transport.enqueue(envelope("before"), queue=transport.queues[0])
+
+        config = WorkerConfig(
+            concurrency=2,
+            min_idle_ms=0,
+            reclaim_interval_s=0.05,
+            trim_interval_s=60.0,
+            scheduler_interval_s=0.05,
+            recovery_interval_s=0.2,
+        )
+        with anyio.fail_after(120):
+            async with worker_running(
+                transport, {"reindex": handler}, config, scheduler=scheduler
+            ):
+                await before.wait()
+
+                source, target = move_slot(cluster.container, slot)
+                assert source != target
+                assert slot_owner(cluster.container, slot) == target
+
+                await transport.enqueue(envelope("after"), queue=transport.queues[0])
+                await after.wait()
+
+        assert done[0] == "before"
+        assert "after" in done, "the worker lost the queue when the slot moved"
     finally:
         await reader.aclose()
         await control.aclose()
