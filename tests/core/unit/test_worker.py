@@ -926,3 +926,63 @@ async def test_a_foreign_stream_with_no_handler_is_left_alone() -> None:
 
     assert transport.acked == []
     assert transport.buried == []
+
+
+class BrokenTransport(FakeTransport):
+    """A transport whose Redis has just gone away."""
+
+    def __init__(self, fail_times: int) -> None:
+        super().__init__()
+        self.remaining = fail_times
+
+    async def read(self, count: int) -> list[Record]:
+        await anyio.lowlevel.checkpoint()
+        if self.remaining:
+            self.remaining -= 1
+            raise ConnectionError("connection closed by server")
+        self.read_counts.append(count)
+        return []
+
+
+async def test_the_consume_loop_survives_a_dropped_connection() -> None:
+    """A failover must not end the worker; redis-py reconnects on the next call."""
+    transport = BrokenTransport(fail_times=2)
+    stop = anyio.Event()
+    sleeps: list[float] = []
+
+    async def sleep(delay: float) -> None:
+        sleeps.append(delay)
+        if len(sleeps) >= 2:
+            stop.set()
+        await anyio.lowlevel.checkpoint()
+
+    await _consume_loop(
+        transport,
+        Slots(),
+        WorkerConfig(recovery_interval_s=7.0),
+        stop,
+        lambda rec: None,
+        sleep,
+    )
+
+    assert sleeps == [7.0, 7.0], "each failure should back off before retrying"
+
+
+async def test_a_failed_read_does_not_leak_slots() -> None:
+    """Slots taken before the failure must come back, or the worker starves."""
+    transport = FakeTransport(batches=[[record(b"1-0")]])
+    slots = Slots()
+    stop = anyio.Event()
+
+    async def explode(entry_ids: Sequence[bytes], *, ttl_ms: int) -> None:
+        raise ConnectionError("connection closed by server")
+
+    transport.mark_alive = explode  # type: ignore[method-assign]
+
+    async def sleep(delay: float) -> None:
+        stop.set()
+        await anyio.lowlevel.checkpoint()
+
+    await _consume_loop(transport, slots, WorkerConfig(), stop, lambda rec: None, sleep)
+
+    assert slots.ids == set()

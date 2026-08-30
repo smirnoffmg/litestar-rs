@@ -49,6 +49,8 @@ class WorkerConfig:
     leader_ttl_ms: int = 15_000
     scheduler_interval_s: float = 1.0
     promote_limit: int = 100
+    recovery_interval_s: float = 1.0
+    """Pause after a supervisor loop hits an error before it tries again."""
 
     def __post_init__(self) -> None:
         if self.concurrency < 1:
@@ -202,22 +204,33 @@ async def _consume_loop(
     cfg: WorkerConfig,
     stop: anyio.Event,
     spawn: Spawn,
+    sleep: Sleeper = anyio.sleep,
 ) -> None:
     while not stop.is_set():
         free = credits(cfg.concurrency, len(slots.ids))
         if free == 0:
             await slots.wait_for_slot(stop)
             continue
-        records = await transport.read(free)
-        if not records:
-            continue
-        entry_ids = [record.entry_id for record in records]
-        # Claim the slots and the liveness keys before anything can run, or a peer
-        # may reclaim an entry this worker has already taken.
-        slots.take(entry_ids)
-        await transport.mark_alive(entry_ids, ttl_ms=cfg.alive_ttl_ms)
-        for record in records:
-            spawn(record)
+        entry_ids: list[bytes] = []
+        try:
+            records = await transport.read(free)
+            if not records:
+                continue
+            entry_ids = [record.entry_id for record in records]
+            # Claim the slots and the liveness keys before anything can run, or a
+            # peer may reclaim an entry this worker has already taken.
+            slots.take(entry_ids)
+            await transport.mark_alive(entry_ids, ttl_ms=cfg.alive_ttl_ms)
+            for record in records:
+                spawn(record)
+        except Exception:
+            # A dropped connection -- what a failover looks like from here -- must
+            # not end the worker. redis-py reconnects on the next command, and
+            # entries we had taken stay in the pending list to be reclaimed.
+            logger.exception("consume loop failed, retrying")
+            for entry_id in entry_ids:
+                slots.release(entry_id)
+            await sleep(cfg.recovery_interval_s)
 
 
 async def _run_one(
@@ -445,7 +458,12 @@ async def _heartbeat_loop(
     transport: StreamTransport, slots: Slots, cfg: WorkerConfig, sleep: Sleeper
 ) -> None:
     while True:
-        await transport.refresh_alive(list(slots.ids), ttl_ms=cfg.alive_ttl_ms)
+        try:
+            await transport.refresh_alive(list(slots.ids), ttl_ms=cfg.alive_ttl_ms)
+        except Exception:
+            logger.exception("liveness refresh failed, retrying")
+            await sleep(cfg.recovery_interval_s)
+            continue
         await sleep(cfg.refresh_interval_s)
 
 
@@ -457,52 +475,59 @@ async def _reclaim_loop(
     spawn: Spawn,
 ) -> None:
     while True:
-        free = credits(cfg.concurrency, len(slots.ids))
-        candidates = await transport.pending(count=free, min_idle_ms=cfg.min_idle_ms)
-        for candidate in candidates:
-            # Skipping our own in-flight ids is not an optimisation. The alive key
-            # is written one await after the read, and reclaiming inside that
-            # window would hand this worker its own entry a second time.
-            if candidate.entry_id in slots.unhandled:
-                continue
-            if candidate.entry_id in slots.ids:
-                continue
-            if candidate.consumer == transport.consumer and (
-                candidate.entry_id not in slots.recoverable
-            ):
-                # Ours, and not left over from a previous run: either running now
-                # or served to us so recently that the reply has not landed.
-                continue
-            slots.recoverable.discard(candidate.entry_id)
-            records = await transport.reclaim(
-                candidate.stream,
-                candidate.entry_id,
-                min_idle_ms=cfg.min_idle_ms,
-                ttl_ms=cfg.alive_ttl_ms,
+        try:
+            free = credits(cfg.concurrency, len(slots.ids))
+            candidates = await transport.pending(
+                count=free, min_idle_ms=cfg.min_idle_ms
             )
-            if not records:
-                continue
-            if cfg.retry.over_delivered(candidate.times_delivered):
-                # Taken from this many dead owners means the entry is killing
-                # whatever picks it up. Backing off would only spread the damage.
+            for candidate in candidates:
+                # Skipping our own in-flight ids is not an optimisation. The alive key
+                # is written one await after the read, and reclaiming inside that
+                # window would hand this worker its own entry a second time.
+                if candidate.entry_id in slots.unhandled:
+                    continue
+                if candidate.entry_id in slots.ids:
+                    continue
+                if candidate.consumer == transport.consumer and (
+                    candidate.entry_id not in slots.recoverable
+                ):
+                    # Ours, and not left over from a previous run: either running now
+                    # or served to us so recently that the reply has not landed.
+                    continue
+                slots.recoverable.discard(candidate.entry_id)
+                records = await transport.reclaim(
+                    candidate.stream,
+                    candidate.entry_id,
+                    min_idle_ms=cfg.min_idle_ms,
+                    ttl_ms=cfg.alive_ttl_ms,
+                )
+                if not records:
+                    continue
+                if cfg.retry.over_delivered(candidate.times_delivered):
+                    # Taken from this many dead owners means the entry is killing
+                    # whatever picks it up. Backing off would only spread the damage.
+                    for record in records:
+                        logger.error(
+                            "entry %r delivered %d times, burying",
+                            record.entry_id,
+                            candidate.times_delivered,
+                        )
+                        await _dead_letter(
+                            transport,
+                            record,
+                            reason="max_deliveries",
+                            error=None,
+                            detail=f"delivered {candidate.times_delivered} times",
+                            times_delivered=candidate.times_delivered,
+                        )
+                    continue
+                slots.take([record.entry_id for record in records])
                 for record in records:
-                    logger.error(
-                        "entry %r delivered %d times, burying",
-                        record.entry_id,
-                        candidate.times_delivered,
-                    )
-                    await _dead_letter(
-                        transport,
-                        record,
-                        reason="max_deliveries",
-                        error=None,
-                        detail=f"delivered {candidate.times_delivered} times",
-                        times_delivered=candidate.times_delivered,
-                    )
-                continue
-            slots.take([record.entry_id for record in records])
-            for record in records:
-                spawn(record)
+                    spawn(record)
+        except Exception:
+            logger.exception("reclaim failed, retrying")
+            await sleep(cfg.recovery_interval_s)
+            continue
         await sleep(cfg.reclaim_interval_s)
 
 
@@ -520,10 +545,15 @@ async def _scheduler_loop(
     token = uuid4().hex
     try:
         while True:
-            if await scheduler.hold_leadership(token, ttl_ms=cfg.leader_ttl_ms):
-                if cron:
-                    await scheduler.schedule_cron(cron)
-                await scheduler.promote(limit=cfg.promote_limit)
+            try:
+                if await scheduler.hold_leadership(token, ttl_ms=cfg.leader_ttl_ms):
+                    if cron:
+                        await scheduler.schedule_cron(cron)
+                    await scheduler.promote(limit=cfg.promote_limit)
+            except Exception:
+                logger.exception("scheduler pass failed, retrying")
+                await sleep(cfg.recovery_interval_s)
+                continue
             await sleep(cfg.scheduler_interval_s)
     finally:
         with anyio.CancelScope(shield=True):
@@ -534,7 +564,12 @@ async def _trim_loop(
     transport: StreamTransport, cfg: WorkerConfig, sleep: Sleeper
 ) -> None:
     while True:
-        await transport.trim(retention_ms=cfg.retention_ms)
+        try:
+            await transport.trim(retention_ms=cfg.retention_ms)
+        except Exception:
+            logger.exception("trim failed, retrying")
+            await sleep(cfg.recovery_interval_s)
+            continue
         await sleep(cfg.trim_interval_s)
 
 
