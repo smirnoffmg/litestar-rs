@@ -96,6 +96,14 @@ library is built to are in
 **[Design and invariants](https://smirnoffmg.dev/litestar-rs/design/)**.
 Runnable [examples](examples/) are included.
 
+## Development
+
+```bash
+make install   # dependencies and git hooks
+make check     # lint, types, import contracts, unit tests
+make test-int  # integration suite, needs Docker
+```
+
 ## License
 
 MIT

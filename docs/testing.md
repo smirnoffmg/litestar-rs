@@ -71,6 +71,17 @@ reclaim — so a test manipulates that key instead of waiting out a timeout.
 
 ## Running this project's own suite
 
+Set up once, which also installs the git hooks:
+
+```bash
+make install
+```
+
+The hooks are configured in the repository but live in `.git/hooks`, which is
+not version controlled — so they exist only where somebody installed them. They
+are a fast local echo of CI, not the gate: CI runs the same four checks plus the
+integration suite and the coverage floor, and that is what blocks a merge.
+
 ```bash
 make test        # unit only, no Docker needed
 make test-int    # integration, starts containers via testcontainers
