@@ -3,11 +3,11 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "pypi-package-uv-template"
+name = "litestar-rs"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.13"
 dependencies = []
 
 [tool.setuptools.packages.find]
@@ -26,7 +26,7 @@ dev = [
 ]
 
 [tool.ruff]
-target-version = "py312"
+target-version = "py313"
 line-length = 88
 src = ["src", "tests"]
 
@@ -35,11 +35,11 @@ select = ["E", "F", "I", "UP"]
 ignore = []
 
 [tool.mypy]
-python_version = "3.12"
+python_version = "3.13"
 warn_return_any = true
 warn_unused_ignores = true
 disallow_untyped_defs = false
-packages = ["src/pypi_package_uv_template"]
+packages = ["src/litestar_rs"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

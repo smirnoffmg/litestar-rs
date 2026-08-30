@@ -2,7 +2,7 @@
 
 import pytest
 
-from pypi_package_uv_template import __version__, main
+from litestar_rs import __version__, main
 
 
 def test_version() -> None:

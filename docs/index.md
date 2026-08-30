@@ -1,4 +1,4 @@
-# pypi-package-uv-template
+# litestar-rs
 
 Add your description here.
 
@@ -12,7 +12,7 @@ uv sync
 ## Usage
 
 ```bash
-python -m pypi_package_uv_template
+python -m litestar_rs
 ```
 
 ## Documentation

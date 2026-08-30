@@ -3,4 +3,4 @@
 
 def main() -> None:
     """Print a greeting."""
-    print("Hello from pypi-package-uv-template!")
+    print("Hello from litestar-rs!")

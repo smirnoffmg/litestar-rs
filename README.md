@@ -1,82 +1,100 @@
-# pypi-package-uv-template
+# litestar-redis-streams
 
-A GitHub repository template for Python packages using [uv](https://docs.astral.sh/uv/), with ruff, mypy, pytest, pre-commit, MkDocs (API docs via mkdocstrings), GitHub Pages, and automatic PyPI release via trusted publishing.
+Распределённая очередь задач на Redis Streams с first-class интеграцией в Litestar.
+Имя проекта — плейсхолдер.
 
-**Use this template** — click "Use this template" above to create a new repo from this template.
+## Что строим
 
-### After creating your repo: replace the placeholder name
+Два слоя, разделённые жёстко:
 
-Run the Makefile with your **distribution name** (PyPI/repo, use hyphens) and **module name** (for `import` / `python -m`, use underscores):
+- ядро: транспорт, воркер, планировщик. Зависимости: `redis`, `msgspec`, `anyio`. **Импорт Litestar здесь запрещён.**
+- плагин: DI, CLI, сериализация, health. Импортирует ядро.
 
-```bash
-make rename DIST_NAME=my-tool MODULE_NAME=my_tool
+Ядро должно быть пригодно к использованию без Litestar.
+
+## Режимы
+
+1. **Очередь задач**: `enqueue → result`, типизированные аргументы, ретраи, отложенный запуск, cron.
+2. **Брокер**: подписка на внешние стримы с чужим форматом payload, без result backend.
+
+Оба режима работают поверх одной consumer group и одного процесса воркера. Это главное отличие от аналогов — не ломать при рефакторинге.
+
+## Инварианты транспорта
+
+Нарушение любого из них — баг, а не компромисс.
+
+**Prefetch по кредитам.** `XREADGROUP COUNT = max(0, concurrency - in_flight)`. Не читать при нуле свободных слотов. Фиксированный COUNT приводит к перекосу распределения между воркерами (см. taskiq-redis#91).
+
+**Ack удаляет запись.** `XACK` + `XDEL` в одном Lua-скрипте. `XACK` сам по себе оставляет запись в стриме — стрим течёт. Дополнительно фоновый `XTRIM MINID` по времени. `MAXLEN ~` не использовать: усечение по длине может выбросить неподтверждённое.
+
+**Liveness отдельно от min-idle-time.** `XAUTOCLAIM` не отличает мёртвый воркер от живого с долгой задачей. Воркер держит `SET job:{id}:alive EX ttl` и продлевает его из супервизора воркера, а не из тела задачи. Reclaim — Lua-скрипт: проверить отсутствие ключа, затем `XCLAIM`. Прикладной код о heartbeat не знает и не должен.
+
+**Ретраи и перезахваты — разные счётчики.** `delivery_count` из `XPENDING` — счётчик reclaim, не прикладных ретраев. Хранить их раздельно, порог по каждому свой. Превышение → `XACK` + `XADD` в DLQ-стрим с оригинальным payload, причиной, трейсбеком, историей попыток.
+
+**Планировщик без выделенного процесса.** ZSET для отложенных и cron. Перенос ZSET → стрим одним Lua: `ZRANGEBYSCORE LIMIT` → `XADD` → `ZREM` атомарно. Лидер выбирается через `SET NX EX` с продлением, любой воркер может им стать. Отдельный процесс-scheduler не вводить.
+
+**Приоритеты.** Строгого приоритета `XREADGROUP` не даёт: с `BLOCK` разблокируется по первому доступному стриму. Схема: неблокирующий проход по стримам от высокого к низкому → при пустом результате один блокирующий на всех. Счётчик проходов ограничивает голодание низкого приоритета.
+
+**Ключи с хеш-тегами с первого коммита.** `{ns}:q:high`, `{ns}:q:low`, `{ns}:sched`. Мультиключевой `XREADGROUP` в Redis Cluster требует общего слота. Переделать схему ключей потом нельзя без миграции.
+
+**Метрика глубины — `lag` из `XINFO GROUPS`** (Redis 7+). `XLEN` после trim бессмыслен.
+
+## Инварианты слоя Litestar
+
+**Task scope в DI.** Резолвить граф `Provide` приложения на синтетическом scope-объекте: `sync_to_thread`, `use_cache`, генераторные зависимости с корректным teardown. Провайдер, которому реально нужен request/headers, — ошибка на старте воркера, не в рантайме. Целевой вид задачи:
+
+```python
+@app_tasks.task
+async def reindex(doc_id: UUID, db: AsyncSession, cfg: Settings) -> None: ...
 ```
 
-Then run `uv sync`, `uv run pytest`, and `uv run ruff check .` to confirm everything works.
+Словарь `ctx` как способ протащить зависимости не вводить ни в каком виде.
 
-**Manual alternative** — replace `pypi-package-uv-template` and `pypi_package_uv_template` everywhere:
+**Сериализация — msgspec приложения.** Тот же encoder/decoder и `type_encoders`, что у Litestar. Сигнатуры задач валидируются той же машинерией, что и хендлеры; несовместимость аргументов ловится при регистрации, не в воркере.
 
-| Location                                 | Change                                                                            |
-| ---------------------------------------- | --------------------------------------------------------------------------------- |
-| **Rename directory**                     | `src/pypi_package_uv_template/` → `src/<your_module>/` (e.g. `src/my_package/`)   |
-| [pyproject.toml](pyproject.toml)         | `name = "..."` (PyPI name); `[tool.mypy]` → `packages = ["src/<your_module>"]`    |
-| Python files in `src/`                   | Imports and any string that mentions the old name (e.g. the `print` in `main.py`) |
-| [tests/test_main.py](tests/test_main.py) | `from <your_module> import ...` and the assertion text                            |
-| [docs/api.md](docs/api.md)               | `::: <your_module>` (mkdocstrings directive)                                      |
-| [docs/index.md](docs/index.md)           | Title and `python -m <your_module>` in the usage example                          |
-| [mkdocs.yml](mkdocs.yml)                 | `site_name:` and `site_url:`                                                      |
-| This README                              | Title (above) and the `python -m` command in Usage                                |
+**CLI через `CLIPluginProtocol`.** Один энтрипоинт: `litestar workers run --queue high --concurrency 20`. Строковый путь к приложению (`"module:app"`) как обязательный параметр init — антипаттерн, не повторять.
 
-## Installation
+**Трассировка в полях стрима.** Запись стрима — hash-поля. `traceparent` кладётся отдельным полем рядом с payload, не внутрь него. Воркер восстанавливает span-контекст; цепочка HTTP → задача не рвётся.
 
-```bash
-uv sync
-```
+**Health.** Плагин отдаёт эндпоинт с состоянием consumer group и лагом. Воркер поднимает тот же ASGI-эндпоинт, чтобы readiness-пробы для web- и worker-деплойментов были идентичны.
 
-Or with pip:
+## Не делаем
 
-```bash
-pip install -e .
-```
+Web UI, поддержку не-Redis бэкендов, синхронный API, Python < 3.13, собственный формат сериализации.
 
-Python 3.12+ is required (see [.python-version](.python-version)). uv will use it automatically.
+## Тесты
 
-## Usage
+Обязательны и пишутся вместе с кодом, не после:
 
-```bash
-python -m pypi_package_uv_template
-```
+- SIGKILL воркера с задачами в PEL → задача подхвачена другим воркером, ровно один раз
+- долгая задача (дольше min-idle-time) не реклеймится, пока жив
+- split-brain планировщика: два лидера не дублируют перенос из ZSET
+- стрим не растёт при устойчивом потоке ack
+- отложенная задача не теряется при trim
+- failover Sentinel во время in-flight задач
+- cron через переход DST
 
-## Development
+Интеграционные — против реального Redis в контейнере, не против мока. Lua-скрипты тестируются отдельно на атомарность при конкурентных вызовах.
 
-1. Install dependencies (including dev): `uv sync`
-2. Install pre-commit hooks so checks run on commit: `pre-commit install`
-3. Run checks manually:
-   - `uv run ruff check .`
-   - `uv run ruff format --check .`
-   - `uv run mypy src/`
-   - `uv run pytest`
-4. Serve docs locally: `uv run mkdocs serve`
-5. Add dependencies: `uv add <pkg>` or `uv add --group dev <pkg>`
+## Стиль
 
-To validate the whole repo: `pre-commit run --all-files`
+Полная типизация, `mypy --strict`. Публичный API — только то, что явно экспортировано из `__init__`. Ошибки конфигурации — на старте процесса, с указанием конкретного провайдера/задачи.
 
-## Documentation
+## Инструменты
 
-API documentation is built with [MkDocs](https://www.mkdocs.org/) and [mkdocstrings](https://mkdocstrings.github.io/), and deployed to **GitHub Pages** on every push to `main`.
+Все четыре гоняются в pre-commit и в CI. Красный любой из них — merge заблокирован; `# noqa`, `# type: ignore` и `ignore_imports` без комментария с причиной не принимаются.
 
-- **Local:** `uv run mkdocs serve`
-- **Online:** After enabling Pages, docs will be at `https://<owner>.github.io/<repo>/`
+**ruff** — линтер и форматтер, других не подключаем. `target-version = "py313"`, форматирование `ruff format`. Набор правил минимум: `E`, `F`, `I`, `UP`, `B`, `ASYNC`, `S`, `RET`, `SIM`, `TID`, `PTH`, `RUF`. `ASYNC` и `B` обязательны: блокирующий вызов в корутине воркера и мутабельный дефолт в сигнатуре задачи — реальные баги этого проекта, а не стилистика. В тестах послабление только на `S101`.
 
-To enable: In the repo **Settings → Pages**, set **Source** to **GitHub Actions** so Pages is served from the workflow.
+**mypy** — `python_version = "3.13"`, `strict = true` на `src` и на `tests`. `disallow_untyped_defs`, `warn_return_any`, `warn_unused_ignores` включены. `ignore_missing_imports` глобально не ставим — только точечно, по модулю, с комментарием. Декоратор `@task` обязан сохранять сигнатуру: несовпадение типов аргументов ловится на месте вызова `enqueue`, а не в воркере.
 
-## Releasing
+**pytest** — `--strict-markers`, `--strict-config`, `-ra`. Маркеры: `unit` (без внешних зависимостей), `integration` (реальный Redis в контейнере), `slow`. Асинхронные тесты — через `anyio` (тот же рантайм, что у ядра), не `pytest-asyncio`. Порог покрытия ядра — 90%, покрытие Lua-скриптов считается по интеграционным тестам. Тесты не зависят от порядка выполнения и от реального времени: часы и таймеры мокаются, `sleep` в тесте — повод для ревью.
 
-Releases are published to **PyPI** automatically when you create a **GitHub Release**.
+**import-linter** — граница ядро/плагин из первого раздела проверяется машинно, не на словах. Контракты:
 
-1. Configure **trusted publishing** for this repo on PyPI: go to your project on [pypi.org](https://pypi.org) → **Publishing** → **Add a new pending publisher**, and add the GitHub repo with workflow name `Publish to PyPI` and the appropriate ref (e.g. `release` for tags).
-2. Create a new release (e.g. tag `v0.1.0`) and publish it; the [publish workflow](.github/workflows/publish.yml) will build and upload the package via OIDC (no API token needed).
+- `forbidden`: ядро не импортирует `litestar` и `click` ни транзитивно, ни под `TYPE_CHECKING`
+- `layers`: плагин → ядро, обратное направление запрещено
+- `independence`: транспорт, планировщик и result backend не импортируют друг друга напрямую, только общие протоколы
+- `forbidden`: тесты ядра не импортируют `litestar` — иначе «ядро работает без Litestar» ничем не подтверждено
 
-## License
-
-See [LICENSE](LICENSE) if present.
+Контракты добавляются первым коммитом слоя, а не после того, как граница уже нарушена.
