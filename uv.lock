@@ -563,6 +563,7 @@ litestar = [
 [package.dev-dependencies]
 dev = [
     { name = "import-linter" },
+    { name = "litestar" },
     { name = "mkdocs" },
     { name = "mkdocs-material" },
     { name = "mkdocstrings", extra = ["python"] },
@@ -588,6 +589,7 @@ provides-extras = ["litestar"]
 [package.metadata.requires-dev]
 dev = [
     { name = "import-linter" },
+    { name = "litestar", specifier = ">=2.0" },
     { name = "mkdocs" },
     { name = "mkdocs-material" },
     { name = "mkdocstrings", extras = ["python"] },

@@ -34,6 +34,7 @@ dev = [
     "mkdocs-material",
     "mkdocstrings[python]",
     "testcontainers[redis]>=4.15.0",
+    "litestar>=2.0",
 ]
 
 [tool.ruff]
