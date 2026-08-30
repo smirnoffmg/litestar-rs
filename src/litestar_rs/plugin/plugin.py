@@ -86,6 +86,7 @@ class QueuePlugin(InitPlugin, CLIPlugin):
             type_decoders=app_config.type_decoders,
             traceparent=self.config.traceparent,
             results=self,
+            payloads=self.config.payloads,
             thread_limit=self.config.thread_limit,
             offload_over_bytes=self.config.offload_over_bytes,
         )
@@ -129,6 +130,8 @@ class QueuePlugin(InitPlugin, CLIPlugin):
                 shards=config.shards,
                 group=config.group,
                 block_ms=config.block_ms,
+                fairness_every=config.fairness_every,
+                max_payload_bytes=config.max_payload_bytes,
                 external=config.external,
             )
             self._scheduler = RedisScheduler(

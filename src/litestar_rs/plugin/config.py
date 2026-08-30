@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 
 from litestar_rs.core.cron import CronJob
 from litestar_rs.core.errors import ConfigurationError
-from litestar_rs.core.protocols import BrokerHandler
+from litestar_rs.core.protocols import BrokerHandler, PayloadStore
 from litestar_rs.core.worker import WorkerConfig
 from litestar_rs.plugin.registry import TaskRegistry
 from litestar_rs.plugin.tracing import TraceparentSource, no_traceparent
@@ -40,6 +40,14 @@ class QueueConfig:
     same data to an application that would rather serve it itself.
     """
     result_ttl_ms: int = 3_600_000
+    fairness_every: int = 10
+    """Passes between giving the lowest-priority queue first refusal. 0 for
+    strict priority, and the starvation that comes with it."""
+    max_payload_bytes: int = 128 * 1024
+    """Refused above this when no payload store is configured."""
+    payloads: PayloadStore | None = None
+    """Where arguments above `offload_over_bytes` go. Without one, the transport
+    refuses an oversized record rather than dropping it quietly."""
     thread_limit: int = 20
     """Threads for synchronous tasks. The asyncio default is a silent bottleneck."""
     offload_over_bytes: int = 128 * 1024

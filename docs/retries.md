@@ -52,8 +52,9 @@ The DLQ is a stream at `{ns}:dlq`:
 
 <!-- docs-test: skip -- reads a real dead letter stream -->
 ```python
-namespace = "lrs"
-entries = await client.xrange(f"{{{namespace}}}:dlq", count=100)
+from litestar_rs import dlq_key
+
+entries = await client.xrange(dlq_key("lrs"), count=100)
 for entry_id, fields in entries:
     print(fields[b"dlq_reason"], fields[b"task"], fields[b"dlq_detail"])
 ```

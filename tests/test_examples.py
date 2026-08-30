@@ -21,6 +21,13 @@ EXAMPLES = [
     "examples.broker_mode",
     "examples.deferred_publication",
     "examples.results",
+    "examples.retries_and_dlq",
+    "examples.priorities",
+    "examples.deduplication",
+    "examples.delayed_jobs",
+    "examples.large_payloads",
+    "examples.sync_tasks_and_timeouts",
+    "examples.tracing",
 ]
 
 
@@ -95,3 +102,47 @@ def test_the_results_example_asks_for_results() -> None:
 
     assert results.plugin.config.result_ttl_ms == 300_000
     assert "summarise" in results.tasks.names
+
+
+def test_every_example_module_is_covered_here() -> None:
+    """An example nobody imports is an example nobody notices going stale."""
+    from pathlib import Path
+
+    directory = Path(__file__).resolve().parents[1] / "examples"
+    modules = {
+        f"examples.{path.stem}"
+        for path in directory.glob("*.py")
+        if path.stem != "__init__"
+    }
+    # These two are not applications, and have tests of their own above.
+    standalone = {"examples.core_without_litestar", "examples.testing_your_app"}
+
+    assert modules - standalone == set(EXAMPLES)
+
+
+def test_the_priorities_example_configures_both_axes() -> None:
+    """Priorities are about kinds of work, shards about sources."""
+    from examples import priorities
+
+    assert priorities.plugin.config.queues == ("high", "low")
+    assert priorities.plugin.config.shards == 4
+    assert priorities.plugin.config.fairness_every == 10
+
+
+def test_the_payload_example_configures_a_store_not_just_a_threshold() -> None:
+    """A threshold with no store offloads nothing at all."""
+    from examples import large_payloads
+
+    assert large_payloads.plugin.config.payloads is not None
+    assert large_payloads.plugin.config.offload_over_bytes == 64 * 1024
+
+
+def test_the_sync_example_keeps_its_blocking_task_synchronous() -> None:
+    """A `def` task is what puts it in the thread pool."""
+    import inspect
+
+    from examples import sync_tasks_and_timeouts as example
+
+    assert not inspect.iscoroutinefunction(example.render_report.function)
+    assert inspect.iscoroutinefunction(example.call_a_slow_api.function)
+    assert example.plugin.config.thread_limit == 8

@@ -76,4 +76,6 @@ def result_wait_key(namespace: str, job_id: str) -> str:
 
 
 def dlq_key(namespace: str) -> str:
+    """Exported: reading the dead letter queue is an ordinary thing to want, and
+    an application should not have to rebuild the key schema to do it."""
     return f"{{{namespace}}}:dlq"

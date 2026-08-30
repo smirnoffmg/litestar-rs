@@ -18,6 +18,7 @@ from litestar_rs.core.errors import (
     MalformedEnvelope,
     PayloadTooLarge,
 )
+from litestar_rs.core.keys import dlq_key
 from litestar_rs.core.payloads import FilePayloadStore, PayloadMissing
 from litestar_rs.core.protocols import (
     BrokerHandler,
@@ -77,6 +78,7 @@ __all__ = [
     "WorkerConfig",
     "WorkerStats",
     "current_enqueuer",
+    "dlq_key",
     "from_fields",
     "run",
     "run_with_signals",

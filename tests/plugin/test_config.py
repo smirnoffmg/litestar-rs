@@ -56,3 +56,57 @@ def test_the_health_route_can_be_turned_off() -> None:
     config = QueueConfig(registry=TaskRegistry(), health_path=None)
 
     assert config.health_path is None
+
+
+def test_every_transport_setting_is_reachable_from_the_configuration() -> None:
+    """A knob the plugin cannot reach is a knob nobody using the plugin has.
+
+    Broker handlers were configurable in name only once already; this is what
+    says so before somebody goes looking for a setting that is not wired.
+    """
+    import dataclasses
+    import inspect
+
+    from litestar_rs import RedisStreamsTransport
+
+    transport_settings = {
+        name
+        for name, parameter in inspect.signature(
+            RedisStreamsTransport.__init__
+        ).parameters.items()
+        if parameter.kind is inspect.Parameter.KEYWORD_ONLY
+    }
+    # The plugin builds the clients and the consumer name itself.
+    built_by_the_plugin = {"reader", "control", "consumer"}
+    configurable = {field.name for field in dataclasses.fields(QueueConfig)}
+    # `external` is derived from `brokers`, which carries the handlers with it.
+    configurable.add("external")
+
+    missing = transport_settings - built_by_the_plugin - configurable
+    assert not missing, f"not reachable through QueueConfig: {sorted(missing)}"
+
+
+def test_every_registry_setting_is_reachable_from_the_configuration() -> None:
+    """The payload store was bindable and not configurable, so offloading a large
+    argument through the plugin did nothing at all."""
+    import dataclasses
+    import inspect
+
+    bind_settings = {
+        name
+        for name, parameter in inspect.signature(TaskRegistry.bind).parameters.items()
+        if parameter.kind is inspect.Parameter.KEYWORD_ONLY
+    }
+    # The plugin is the enqueuer and the result store, and supplies the app's own
+    # codecs and trace source.
+    supplied_by_the_plugin = {
+        "enqueuer",
+        "results",
+        "type_encoders",
+        "type_decoders",
+        "traceparent",
+    }
+    configurable = {field.name for field in dataclasses.fields(QueueConfig)}
+
+    missing = bind_settings - supplied_by_the_plugin - configurable
+    assert not missing, f"not reachable through QueueConfig: {sorted(missing)}"

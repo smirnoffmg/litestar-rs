@@ -4,6 +4,40 @@ site_url: https://smirnoffmg.dev/litestar-rs/
 
 theme:
   name: material
+  features:
+    - content.code.copy
+    - navigation.instant
+    - navigation.top
+    - search.suggest
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+
+# Without these, Material renders code as a plain <pre>: no highlighting, and
+# long lines are clipped rather than scrolled.
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences
+  - pymdownx.details
 
 plugins:
   - search
