@@ -11,6 +11,7 @@ import re
 import sys
 import textwrap
 import types
+import warnings
 from pathlib import Path
 
 import anyio
@@ -73,13 +74,22 @@ def test_the_documentation_url_agrees_everywhere() -> None:
     assert documented.rstrip("/") in (ROOT / "README.md").read_text()
 
 
-PYTHON_BLOCK = re.compile(r"^```python\n(.*?)^```", re.M | re.S)
+PYTHON_BLOCK = re.compile(
+    r"(?:^<!-- docs-test: skip -- (?P<reason>[^>]+?) -->\n)?"
+    r"^```python\n(?P<code>.*?)^```",
+    re.M | re.S,
+)
+"""A block may be marked unrunnable, in the documentation, with the reason.
+
+In a comment rather than a list in this file: whoever edits the page sees why it
+is exempt, and a marker cannot silently start matching a different block.
+"""
 
 APPLICATION_STUBS = '''
 class AsyncSession: ...
 class Settings: ...
-def session() -> AsyncSession: return AsyncSession()
-def settings() -> Settings: return Settings()
+async def session() -> AsyncSession: return AsyncSession()
+def settings() -> Settings: return Settings()  # noqa: E704
 
 
 class _Whatever:
@@ -94,28 +104,19 @@ client = store = scheduler = plugin = transport = config = _Whatever()
 doc_id = invoice_id = job_id = "job-1"
 '''
 
-NEEDS_A_RUNNING_APPLICATION = {
-    "reindex.enqueue(": "enqueue works once the plugin has bound the registry",
-    "registry.result(job_id)": "a result store is configured by the plugin at startup",
-    "client.xrange(": "reads a real DLQ stream",
-    "entries[0]": "unpacks a real XRANGE reply",
-    'FilePayloadStore("/mnt/queue-payloads")': "creates the directory it is given",
-    "enqueuer.assert_enqueued": "asserts on the reader's own request handler",
-}
 
-
-def documented_blocks() -> list[tuple[Path, int, str]]:
+def documented_blocks() -> list[tuple[Path, int, str, str | None]]:
     found = []
     for page in PAGES:
         text = page.read_text()
         for match in PYTHON_BLOCK.finditer(text):
             line = text[: match.start()].count("\n") + 1
-            found.append((page, line, match.group(1)))
+            found.append((page, line, match.group("code"), match.group("reason")))
     return found
 
 
 def test_every_documented_snippet_parses() -> None:
-    for page, line, code in documented_blocks():
+    for page, line, code, _ in documented_blocks():
         try:
             ast.parse(code)
         except SyntaxError as exc:
@@ -130,7 +131,11 @@ def test_a_page_runs_top_to_bottom(page: Path) -> None:
     has to be imported by the documentation itself, which is what stops a guide
     from quietly referring to something it never showed.
     """
-    blocks = [(line, code) for p, line, code in documented_blocks() if p == page]
+    blocks = [
+        (line, code, reason)
+        for p, line, code, reason in documented_blocks()
+        if p == page
+    ]
     if not blocks:
         pytest.skip("no python in this page")
 
@@ -138,15 +143,7 @@ def test_a_page_runs_top_to_bottom(page: Path) -> None:
     sys.modules[module.__name__] = module
     exec(compile(APPLICATION_STUBS, "stubs", "exec"), module.__dict__)  # noqa: S102
     try:
-        for line, code in blocks:
-            reason = next(
-                (
-                    why
-                    for mark, why in NEEDS_A_RUNNING_APPLICATION.items()
-                    if mark in code
-                ),
-                None,
-            )
+        for line, code, reason in blocks:
             if reason is not None:
                 continue
             source = code
@@ -154,7 +151,12 @@ def test_a_page_runs_top_to_bottom(page: Path) -> None:
             if _has_top_level_await(tree):
                 source = "async def __block():\n" + textwrap.indent(code, "    ")
             try:
-                exec(compile(source, f"{page.name}:{line}", "exec"), module.__dict__)  # noqa: S102
+                with warnings.catch_warnings():
+                    # Documentation must not teach an API its own framework has
+                    # deprecated; a reader copies what is in front of them.
+                    warnings.simplefilter("error", DeprecationWarning)
+                    code_object = compile(source, f"{page.name}:{line}", "exec")
+                    exec(code_object, module.__dict__)  # noqa: S102
                 if source is not code:
                     anyio.from_thread  # noqa: B018 - keep anyio imported
                     asyncio.run(module.__dict__["__block"]())

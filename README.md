@@ -36,7 +36,7 @@ suite.
 ## Quick start
 
 ```python
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from litestar import Litestar, post
 from litestar.di import Provide
@@ -52,8 +52,8 @@ async def reindex(doc_id: UUID, session: AsyncSession) -> None:
 
 
 @post("/documents")
-async def create(doc_id: UUID) -> str:
-    await reindex.enqueue(doc_id=doc_id)
+async def create() -> str:
+    await reindex.enqueue(doc_id=uuid4())
     return "queued"
 
 

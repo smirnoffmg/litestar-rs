@@ -25,6 +25,7 @@ async def reindex(doc_id: UUID, session: AsyncSession, settings: Settings) -> No
 With `session` and `settings` registered as Litestar dependencies, only `doc_id`
 is serialised. The call site says so:
 
+<!-- docs-test: skip -- enqueue works once the plugin has bound the registry -->
 ```python
 await reindex.enqueue(doc_id=doc_id)
 ```
@@ -37,6 +38,7 @@ Payload parameters must be annotated — the annotations become a msgspec struct
 and that struct is built at `enqueue`. A wrong argument is therefore the
 caller's error rather than a worker's:
 
+<!-- docs-test: skip -- the same, and it is meant to raise -->
 ```python
 await reindex.enqueue(doc_id="not-a-uuid")  # raises at the call site
 ```
@@ -112,6 +114,7 @@ See [Priorities](priorities.md) for how a worker reads several queues.
 Above `QueueConfig.offload_over_bytes` the encoded payload goes to a
 `PayloadStore` and the record carries a reference instead. One ships:
 
+<!-- docs-test: skip -- creates the directory it is given -->
 ```python
 from litestar_rs import FilePayloadStore
 

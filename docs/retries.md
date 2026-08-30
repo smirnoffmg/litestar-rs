@@ -50,6 +50,7 @@ own record.
 
 The DLQ is a stream at `{ns}:dlq`:
 
+<!-- docs-test: skip -- reads a real dead letter stream -->
 ```python
 namespace = "lrs"
 entries = await client.xrange(f"{{{namespace}}}:dlq", count=100)
@@ -60,6 +61,7 @@ for entry_id, fields in entries:
 The original payload is untouched, so replaying is re-enqueueing it. Reset
 `attempt` unless you want the replay to inherit the exhausted budget:
 
+<!-- docs-test: skip -- unpacks a real XRANGE reply -->
 ```python
 import msgspec.structs
 

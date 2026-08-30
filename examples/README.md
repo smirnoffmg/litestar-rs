@@ -23,3 +23,18 @@ uv run litestar --app examples.basic_app:app workers run --concurrency 10
 ```
 
 Both need a Redis at `redis://localhost:6379/0`, or set `REDIS_URL`.
+
+Two are not web applications. `core_without_litestar.py` runs on its own:
+
+```bash
+uv run python -m examples.core_without_litestar
+```
+
+and `testing_your_app.py` is a pytest module:
+
+```bash
+uv run pytest examples/testing_your_app.py
+```
+
+Its last test is skipped unless `REDIS_URL` is set, because it runs a real
+worker.

@@ -22,6 +22,7 @@ async def handle_request() -> None:
     """Whatever your application does; it enqueues along the way."""
 ```
 
+<!-- docs-test: skip -- asserts on the reader's own request handler -->
 ```python
 from litestar_rs import CollectingEnqueuer
 

@@ -34,6 +34,7 @@ job_id = await reindex.enqueue(doc_id=doc_id, result_ttl_ms=300_000)
 `enqueue` returns the job id whether or not a result was requested — that is
 what an outcome is looked up by.
 
+<!-- docs-test: skip -- a result store is configured by the plugin at startup -->
 ```python
 result = await registry.result(job_id)
 if result is not None and result.ok:
