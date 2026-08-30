@@ -89,7 +89,8 @@ class QueuePlugin(InitPlugin, CLIPlugin):
             offload_over_bytes=self.config.offload_over_bytes,
         )
         app_config.lifespan.append(self._lifespan)
-        app_config.route_handlers.append(self._health_route())
+        if self.config.health_path is not None:
+            app_config.route_handlers.append(self._health_route())
         return app_config
 
     def on_cli_init(self, cli: Group) -> None:
@@ -153,13 +154,18 @@ class QueuePlugin(InitPlugin, CLIPlugin):
         deployment asks exactly the question it asks a web one, computed by the
         same function rather than a lookalike.
         """
+        if self.config.health_path is None:
+            raise ConfigurationError(
+                "health_path is None, so there is no health route to serve; "
+                "set one to use --health-port"
+            )
         # No OpenAPI: a worker serves one route for a probe, not an API surface.
         return Litestar(route_handlers=[self._health_route()], openapi_config=None)
 
     def _health_route(self) -> Any:
         plugin = self
 
-        @get(self.config.health_path)
+        @get(self.config.health_path or "/health/queue")
         async def health() -> QueueHealth:
             return await queue_health(plugin.transport, plugin.stats)
 

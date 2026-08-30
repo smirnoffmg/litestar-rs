@@ -28,7 +28,21 @@ connection hung by a failover.
 
 ## Health
 
-The plugin serves `QueueConfig.health_path` (`/health/queue` by default):
+The plugin serves `QueueConfig.health_path` (`/health/queue` by default). If the
+application already uses that path, startup fails with the clash named rather
+than one handler shadowing the other — move it, or set `health_path=None` and
+serve the same data yourself:
+
+```python
+from litestar_rs.plugin import queue_health
+
+@get("/healthz")
+async def healthz(plugin: QueuePlugin) -> dict[str, object]:
+    queue = await queue_health(plugin.transport, plugin.stats)
+    return {"queue": queue, "database": ...}
+```
+
+The response:
 
 ```json
 {

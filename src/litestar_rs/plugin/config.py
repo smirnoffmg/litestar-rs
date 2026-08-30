@@ -32,7 +32,13 @@ class QueueConfig:
     block_ms: int = 5_000
     worker: WorkerConfig = field(default_factory=WorkerConfig)
     cron: Sequence[CronJob] = ()
-    health_path: str = "/health/queue"
+    health_path: str | None = "/health/queue"
+    """Where the plugin serves queue health, or None to register no route.
+
+    Registering a path the application already uses fails at startup rather than
+    shadowing one of them, so move it or turn it off; `queue_health()` gives the
+    same data to an application that would rather serve it itself.
+    """
     result_ttl_ms: int = 3_600_000
     thread_limit: int = 20
     """Threads for synchronous tasks. The asyncio default is a silent bottleneck."""
@@ -55,7 +61,7 @@ class QueueConfig:
     def __post_init__(self) -> None:
         if not self.redis_url:
             raise ConfigurationError("redis_url must not be empty")
-        if not self.health_path.startswith("/"):
+        if self.health_path is not None and not self.health_path.startswith("/"):
             raise ConfigurationError(
                 f"health_path must start with '/', got {self.health_path!r}"
             )

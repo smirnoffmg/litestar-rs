@@ -29,3 +29,10 @@ def test_health_is_unhealthy_when_redis_cannot_report_lag() -> None:
 
     assert reported.healthy is True
     assert unknown.healthy is False
+
+
+def test_the_health_route_can_be_turned_off() -> None:
+    """An application with its own health endpoint should not be forced a second."""
+    config = QueueConfig(registry=TaskRegistry(), health_path=None)
+
+    assert config.health_path is None

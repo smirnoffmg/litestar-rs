@@ -5,7 +5,7 @@ from uuid import UUID, uuid4
 
 import anyio
 import pytest
-from litestar import Litestar, post
+from litestar import Litestar, get, post
 from litestar.di import Provide
 from litestar.testing import AsyncTestClient
 from redis.asyncio import Redis
@@ -242,3 +242,42 @@ async def test_the_cli_passes_the_worker_everything_it_takes(
     }
 
     assert wired == accepted, f"the CLI never passes: {sorted(accepted - wired)}"
+
+
+def test_a_path_already_taken_fails_at_startup(redis_url: str, namespace: str) -> None:
+    """Loudly, rather than one handler quietly shadowing the other."""
+    from litestar.exceptions import ImproperlyConfiguredException
+
+    @get("/health/queue")
+    async def theirs() -> str:
+        return "theirs"
+
+    plugin = QueuePlugin(
+        QueueConfig(registry=TaskRegistry(), redis_url=redis_url, namespace=namespace)
+    )
+
+    with pytest.raises(ImproperlyConfiguredException, match="already registered"):
+        Litestar(route_handlers=[theirs], plugins=[plugin])
+
+
+def test_turning_the_health_route_off_registers_nothing(
+    redis_url: str, namespace: str
+) -> None:
+    @get("/health/queue")
+    async def theirs() -> str:
+        return "theirs"
+
+    plugin = QueuePlugin(
+        QueueConfig(
+            registry=TaskRegistry(),
+            redis_url=redis_url,
+            namespace=namespace,
+            health_path=None,
+        )
+    )
+
+    app = Litestar(route_handlers=[theirs], plugins=[plugin])
+
+    assert "/health/queue" in {route.path for route in app.routes}
+    with pytest.raises(ConfigurationError, match="no health route"):
+        plugin.health_app()
