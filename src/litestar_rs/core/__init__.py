@@ -26,14 +26,22 @@ from litestar_rs.core.protocols import (
 )
 from litestar_rs.core.retry import RetryPolicy
 from litestar_rs.core.scheduler import RedisScheduler
+from litestar_rs.core.testing import (
+    CollectingEnqueuer,
+    EagerEnqueuer,
+    UnknownTask,
+    worker_running,
+)
 from litestar_rs.core.transport import RedisStreamsTransport
 from litestar_rs.core.worker import WorkerConfig, run, run_with_signals
 
 __all__ = [
     "ENVELOPE_VERSION",
     "Codec",
+    "CollectingEnqueuer",
     "ConfigurationError",
     "CronJob",
+    "EagerEnqueuer",
     "Enqueuer",
     "Envelope",
     "JsonCodec",
@@ -49,9 +57,11 @@ __all__ = [
     "Sleeper",
     "StreamTransport",
     "TaskHandler",
+    "UnknownTask",
     "WorkerConfig",
     "from_fields",
     "run",
     "run_with_signals",
     "to_fields",
+    "worker_running",
 ]

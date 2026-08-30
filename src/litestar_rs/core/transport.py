@@ -10,6 +10,7 @@ from litestar_rs.core.envelope import Envelope, Pending, Record, to_fields
 from litestar_rs.core.errors import ConfigurationError, PayloadTooLarge
 from litestar_rs.core.keys import (
     alive_key,
+    dedup_key,
     dlq_key,
     stream_for,
     stream_keys,
@@ -220,6 +221,17 @@ class RedisStreamsTransport:
         keys = [self.alive_key(entry_id) for entry_id in entry_ids]
         if keys:
             await self.control.delete(*keys)
+
+    async def claim_dedup(self, key: str, *, owner: str, ttl_ms: int) -> bool:
+        """Win the right to run this key, or report that someone already has.
+
+        The guarantee is at-least-once, so an application that must not repeat a
+        side effect needs a gate it controls. This is that gate.
+        """
+        won = await self.control.set(
+            dedup_key(self.namespace, key), owner, nx=True, px=ttl_ms
+        )
+        return bool(won)
 
     async def ack(self, stream: str, entry_ids: Sequence[bytes]) -> int:
         if not entry_ids:

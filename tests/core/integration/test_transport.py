@@ -215,3 +215,11 @@ async def test_the_low_queue_is_still_reached_when_high_is_empty(
     [record] = await prioritised.read(10)
 
     assert prioritised.queue_of(record.stream) == "low"
+
+
+async def test_a_dedup_key_can_be_claimed_once(
+    transport: RedisStreamsTransport,
+) -> None:
+    assert await transport.claim_dedup("invoice-42", owner="a", ttl_ms=60_000) is True
+    assert await transport.claim_dedup("invoice-42", owner="b", ttl_ms=60_000) is False
+    assert await transport.claim_dedup("invoice-43", owner="b", ttl_ms=60_000) is True

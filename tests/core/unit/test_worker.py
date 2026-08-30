@@ -125,6 +125,8 @@ class FakeTransport:
         self.acked: list[tuple[str, list[bytes]]] = []
         self.trimmed = 0
         self.buried: list[tuple[bytes, str, str]] = []
+        self.dedup_claims: list[str] = []
+        self.dedup_taken: set[str] = set()
         self.events: list[str] = []
 
     consumer = "worker-1"
@@ -152,6 +154,10 @@ class FakeTransport:
 
     async def clear_alive(self, entry_ids: Iterable[bytes]) -> None:
         self.cleared.append(list(entry_ids))
+
+    async def claim_dedup(self, key: str, *, owner: str, ttl_ms: int) -> bool:
+        self.dedup_claims.append(key)
+        return key not in self.dedup_taken
 
     async def ack(self, stream: str, entry_ids: Sequence[bytes]) -> int:
         self.acked.append((stream, list(entry_ids)))
@@ -647,3 +653,48 @@ async def test_entries_left_by_a_previous_run_are_taken_back() -> None:
 
     assert spawned == [b"7-0"]
     assert slots.recoverable == set(), "taken once, not on every pass"
+
+
+async def test_a_job_whose_dedup_key_is_taken_is_skipped_not_failed() -> None:
+    """Delivery is at-least-once, so the gate sits right before the side effect."""
+    transport = FakeTransport()
+    transport.dedup_taken.add("invoice-42")
+    slots = Slots()
+    slots.take([b"1-0"])
+    ran: list[str] = []
+
+    async def handler(envelope: Envelope) -> None:
+        ran.append(envelope.id)
+
+    guarded = record(b"1-0")
+    guarded.fields[b"dedup"] = b"invoice-42"
+
+    await _run_one(
+        transport, FakeScheduler(), {"reindex": handler}, slots, WorkerConfig(), guarded
+    )
+
+    assert ran == []
+    assert transport.acked == [("{lrs}:q:default:0", [b"1-0"])]
+    assert transport.buried == []
+
+
+async def test_a_job_without_a_dedup_key_is_not_gated() -> None:
+    transport = FakeTransport()
+    slots = Slots()
+    slots.take([b"1-0"])
+    ran: list[str] = []
+
+    async def handler(envelope: Envelope) -> None:
+        ran.append(envelope.id)
+
+    await _run_one(
+        transport,
+        FakeScheduler(),
+        {"reindex": handler},
+        slots,
+        WorkerConfig(),
+        record(b"1-0"),
+    )
+
+    assert ran == ["1-0"]
+    assert transport.dedup_claims == []

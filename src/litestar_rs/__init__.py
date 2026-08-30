@@ -5,8 +5,10 @@ Delivery is at-least-once: handlers must be idempotent.
 
 from litestar_rs.core import (
     Codec,
+    CollectingEnqueuer,
     ConfigurationError,
     CronJob,
+    EagerEnqueuer,
     Enqueuer,
     Envelope,
     JsonCodec,
@@ -30,8 +32,10 @@ __version__ = "0.1.0"
 
 __all__ = [
     "Codec",
+    "CollectingEnqueuer",
     "ConfigurationError",
     "CronJob",
+    "EagerEnqueuer",
     "Enqueuer",
     "Envelope",
     "JsonCodec",

@@ -114,6 +114,7 @@ name = "Core internal layering"
 type = "layers"
 containers = ["litestar_rs.core"]
 layers = [
+    "testing",
     "worker",
     "transport : scheduler",
     "scripts",

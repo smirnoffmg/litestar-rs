@@ -28,6 +28,8 @@ class Envelope(msgspec.Struct, frozen=True, kw_only=True):
     payload_ref: str | None = None
     traceparent: str | None = None
     tracestate: str | None = None
+    dedup: str | None = None
+    """Application-chosen key. At most one job per key runs within its window."""
     history: tuple[str, ...] = ()
     """One compact line per failed attempt, oldest first.
 
@@ -59,6 +61,7 @@ def to_fields(envelope: Envelope) -> dict[bytes, bytes]:
         b"payload_ref": envelope.payload_ref,
         b"traceparent": envelope.traceparent,
         b"tracestate": envelope.tracestate,
+        b"dedup": envelope.dedup,
     }
     # Redis has no null: an unset field is written as no field at all.
     fields.update({k: v.encode() for k, v in optional.items() if v is not None})
@@ -82,6 +85,7 @@ def from_fields(fields: Mapping[bytes, bytes]) -> Envelope:
             ("payload_ref", b"payload_ref"),
             ("traceparent", b"traceparent"),
             ("tracestate", b"tracestate"),
+            ("dedup", b"dedup"),
         )
         if key in fields
     }

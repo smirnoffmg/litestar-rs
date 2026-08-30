@@ -43,6 +43,7 @@ class WorkerConfig:
     retention_ms: int = 24 * 60 * 60 * 1000
     drain_timeout_s: float = 30.0
     retry: RetryPolicy = field(default_factory=RetryPolicy)
+    dedup_ttl_ms: int = 24 * 60 * 60 * 1000
     leader_ttl_ms: int = 15_000
     scheduler_interval_s: float = 1.0
     promote_limit: int = 100
@@ -229,6 +230,10 @@ async def _run_one(
             await _hand_back_unknown(transport, scheduler, slots, cfg, record, envelope)
             return
 
+        if not await _may_run(transport, cfg, envelope):
+            await transport.ack(record.stream, [record.entry_id])
+            return
+
         await handler(envelope)
         await transport.ack(record.stream, [record.entry_id])
     except anyio.get_cancelled_exc_class():
@@ -242,6 +247,24 @@ async def _run_one(
         await _retry_or_bury(transport, scheduler, cfg, record, exc)
     finally:
         slots.release(record.entry_id)
+
+
+async def _may_run(
+    transport: StreamTransport, cfg: WorkerConfig, envelope: Envelope
+) -> bool:
+    """Gate a job on its deduplication key, if it carries one.
+
+    Checked here rather than at enqueue: delivery is at-least-once, so the only
+    place a duplicate can be stopped is immediately before the side effect.
+    """
+    if envelope.dedup is None:
+        return True
+    won = await transport.claim_dedup(
+        envelope.dedup, owner=envelope.id, ttl_ms=cfg.dedup_ttl_ms
+    )
+    if not won:
+        logger.info("skipping %r, dedup key %r taken", envelope.id, envelope.dedup)
+    return won
 
 
 async def _retry_or_bury(

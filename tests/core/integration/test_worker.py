@@ -13,6 +13,7 @@ import pytest
 from litestar_rs.core.envelope import Envelope
 from litestar_rs.core.retry import RetryPolicy
 from litestar_rs.core.scheduler import RedisScheduler
+from litestar_rs.core.testing import worker_running
 from litestar_rs.core.transport import RedisStreamsTransport
 from litestar_rs.core.worker import WorkerConfig, run
 
@@ -329,3 +330,44 @@ async def test_a_task_out_of_attempts_lands_in_the_dlq_intact(
 
     assert await transport.control.xlen(transport.streams[0]) == 0
     assert await scheduler.pending() == 0
+
+
+async def test_a_dedup_key_lets_only_one_copy_run(
+    transport: RedisStreamsTransport, scheduler: RedisScheduler
+) -> None:
+    """Two identical jobs reach the worker; the side effect happens once.
+
+    A third job without a key acts as a marker. One shard and one slot mean it
+    is handled after the other two, so the test waits on it rather than polling.
+    """
+    for copy in ("a", "b"):
+        await transport.enqueue(
+            Envelope(
+                id=f"job-{copy}",
+                task="reindex",
+                payload=b"{}",
+                enqueued_at=1712345678901,
+                dedup="invoice-42",
+            ),
+            queue=transport.queues[0],
+        )
+    await transport.enqueue(
+        Envelope(id="marker", task="marker", payload=b"{}", enqueued_at=1712345678901),
+        queue=transport.queues[0],
+    )
+
+    ran: list[str] = []
+    reached_marker = anyio.Event()
+
+    async def handler(envelope_: Envelope) -> None:
+        ran.append(envelope_.id)
+
+    async def marker(envelope_: Envelope) -> None:
+        reached_marker.set()
+
+    registry = {"reindex": handler, "marker": marker}
+    with anyio.fail_after(30):
+        async with worker_running(transport, registry, config(), scheduler=scheduler):
+            await reached_marker.wait()
+
+    assert ran == ["job-a"], f"the gate let through: {ran}"
