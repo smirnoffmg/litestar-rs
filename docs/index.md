@@ -67,6 +67,24 @@ litestar workers run --queue high --concurrency 20
 
 Ядро пригодно к использованию без Litestar.
 
+## Постановка задачи внутри транзакции
+
+Задача, поставленная до `COMMIT`, может быть подхвачена воркером раньше, чем строка
+станет видимой, а при откате — исполниться по данным, которых нет. `DeferredEnqueuer`
+копит задачи и публикует их из `after_commit`:
+
+```python
+from litestar_rs import DeferredEnqueuer
+
+deferred = DeferredEnqueuer(plugin)
+# ... в обработчике: await reindex.enqueue(...) через deferred
+# в after_commit: await deferred.flush()
+# в rollback:     deferred.discard()
+```
+
+Это не transactional outbox: падение между commit и flush задачу теряет. Работа,
+которая обязана пережить и это, требует outbox в той же базе.
+
 ## Тестирование приложения
 
 ```python

@@ -1,6 +1,7 @@
 """Transport, worker and scheduling core. Importing Litestar from here is forbidden."""
 
 from litestar_rs.core.cron import CronJob
+from litestar_rs.core.deferred import DeferredEnqueuer
 from litestar_rs.core.envelope import (
     ENVELOPE_VERSION,
     Envelope,
@@ -46,6 +47,7 @@ __all__ = [
     "CollectingEnqueuer",
     "ConfigurationError",
     "CronJob",
+    "DeferredEnqueuer",
     "EagerEnqueuer",
     "Enqueuer",
     "Envelope",

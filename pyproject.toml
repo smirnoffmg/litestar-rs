@@ -116,7 +116,7 @@ type = "layers"
 containers = ["litestar_rs.core"]
 layers = [
     "testing",
-    "worker",
+    "worker : deferred",
     "transport : scheduler : results",
     "scripts",
     "protocols",
