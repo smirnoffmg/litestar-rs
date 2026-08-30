@@ -1,20 +1,24 @@
 # litestar-rs
 
-Add your description here.
+Распределённая очередь задач на Redis Streams с first-class интеграцией в Litestar.
 
-## Installation
+Гарантия доставки — **at-least-once**. Хендлеры обязаны быть идемпотентными;
+для этого предусмотрен dedup-ключ, проверяемый до исполнения.
 
-```bash
-uv sync
-# or: pip install -e .
-```
-
-## Usage
+## Установка
 
 ```bash
-python -m litestar_rs
+uv add litestar-rs
 ```
 
-## Documentation
+## Слои
 
-See [API Reference](api.md) for the public API.
+- **ядро** — транспорт, воркер, планировщик. Зависимости: `redis`, `msgspec`, `anyio`.
+  Импорт Litestar здесь запрещён и проверяется import-linter.
+- **плагин** — DI, CLI, сериализация, health. Импортирует ядро.
+
+Ядро пригодно к использованию без Litestar.
+
+## Документация
+
+Публичный API — в [API Reference](api.md).

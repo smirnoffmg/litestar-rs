@@ -1,17 +1,25 @@
 [build-system]
-requires = ["setuptools>=61.0"]
-build-backend = "setuptools.build_meta"
+requires = ["hatchling"]
+build-backend = "hatchling.build"
 
 [project]
 name = "litestar-rs"
 version = "0.1.0"
-description = "Add your description here"
+description = "Distributed task queue on Redis Streams with first-class Litestar integration"
 readme = "README.md"
 requires-python = ">=3.13"
-dependencies = []
+dependencies = [
+    "redis[hiredis]>=5.0",
+    "msgspec>=0.18",
+    "anyio>=4.2",
+    "uvloop>=0.21",
+]
 
-[tool.setuptools.packages.find]
-where = ["src"]
+[project.optional-dependencies]
+litestar = ["litestar>=2.0"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/litestar_rs"]
 
 [dependency-groups]
 dev = [
@@ -19,10 +27,12 @@ dev = [
     "mypy",
     "pytest",
     "pytest-cov",
+    "import-linter",
     "pre-commit",
     "mkdocs",
     "mkdocs-material",
     "mkdocstrings[python]",
+    "testcontainers[redis]>=4.15.0",
 ]
 
 [tool.ruff]
@@ -31,17 +41,68 @@ line-length = 88
 src = ["src", "tests"]
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "UP"]
+select = ["E", "F", "I", "UP", "B", "ASYNC", "S", "RET", "SIM", "TID", "PTH", "RUF"]
 ignore = []
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101"]
+
+[tool.ruff.lint.flake8-tidy-imports]
+ban-relative-imports = "all"
+
+[tool.ruff.lint.isort]
+known-first-party = ["litestar_rs"]
 
 [tool.mypy]
 python_version = "3.13"
+strict = true
+files = ["src", "tests"]
+mypy_path = ["src"]
 warn_return_any = true
 warn_unused_ignores = true
-disallow_untyped_defs = false
-packages = ["src/litestar_rs"]
+disallow_untyped_defs = true
+enable_error_code = ["ignore-without-code", "redundant-expr", "truthy-bool"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-v"
+addopts = "-ra --strict-markers --strict-config"
 pythonpath = ["src"]
+markers = [
+    "unit: no external dependencies",
+    "integration: requires a real Redis 7+",
+    "slow: spawns processes",
+]
+
+[tool.coverage.run]
+source_pkgs = ["litestar_rs.core"]
+branch = true
+
+[tool.coverage.report]
+fail_under = 0
+show_missing = true
+exclude_also = [
+    "if TYPE_CHECKING:",
+    "^\\s*\\.\\.\\.$",
+    "raise NotImplementedError",
+]
+
+[tool.importlinter]
+root_packages = ["litestar_rs", "tests"]
+include_external_packages = true
+
+[[tool.importlinter.contracts]]
+name = "Core is framework-free"
+type = "forbidden"
+source_modules = ["litestar_rs.core"]
+forbidden_modules = ["litestar", "click", "litestar_rs.plugin"]
+
+[[tool.importlinter.contracts]]
+name = "Plugin sits above core"
+type = "layers"
+layers = ["litestar_rs.plugin", "litestar_rs.core"]
+
+[[tool.importlinter.contracts]]
+name = "Core tests are framework-free"
+type = "forbidden"
+source_modules = ["tests.core"]
+forbidden_modules = ["litestar", "click"]
