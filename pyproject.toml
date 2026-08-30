@@ -118,7 +118,8 @@ layers = [
     "transport : scheduler",
     "scripts",
     "protocols",
-    "envelope : keys : cron",
+    "cron",
+    "envelope : keys",
     "errors",
 ]
 

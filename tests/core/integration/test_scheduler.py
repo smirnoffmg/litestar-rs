@@ -8,7 +8,7 @@ from collections.abc import Awaitable, Callable
 import anyio
 import pytest
 
-from litestar_rs.core.cron import CronJob, occurrence_id
+from litestar_rs.core.cron import CronJob, occurrence_envelope, occurrence_id
 from litestar_rs.core.envelope import Envelope, from_fields
 from litestar_rs.core.keys import sched_job_key, stream_key
 from litestar_rs.core.scheduler import RedisScheduler
@@ -144,3 +144,47 @@ async def test_schedule_in_uses_the_redis_clock(scheduler: RedisScheduler) -> No
     score = await scheduler.control.zscore(scheduler.zset, "job-1")
     assert score is not None
     assert score - await scheduler.now_ms() > 3_000_000
+
+
+def every_five_minutes() -> CronJob:
+    return CronJob(name="every-5", expression="*/5 * * * *", task="reindex")
+
+
+async def missed_an_hour_ago(scheduler: RedisScheduler, job: CronJob) -> Envelope:
+    """Write the occurrence a leader would have written before the fleet died."""
+    due = await scheduler.now_ms() - 3_600_000
+    envelope = occurrence_envelope(job, due)
+    await scheduler.schedule_at(
+        envelope, queue=job.queue, when_ms=due, scheduled_id=envelope.id
+    )
+    return envelope
+
+
+async def test_a_missed_occurrence_runs_late_rather_than_being_lost(
+    scheduler: RedisScheduler, transport: RedisStreamsTransport
+) -> None:
+    """The due time rides along, so a late run is recognisable as late."""
+    job = every_five_minutes()
+    envelope = await missed_an_hour_ago(scheduler, job)
+
+    assert len(await scheduler.promote()) == 1
+
+    [record] = await transport.read(10)
+    assert from_fields(record.fields).enqueued_at == envelope.enqueued_at
+
+
+async def test_an_outage_worth_of_occurrences_collapses_into_one(
+    scheduler: RedisScheduler,
+) -> None:
+    """Twelve occurrences came and went; the fleet returns and runs one."""
+    job = every_five_minutes()
+    envelope = await missed_an_hour_ago(scheduler, job)
+    await scheduler.promote()
+
+    [resumed] = await scheduler.schedule_cron([job])
+
+    assert resumed != envelope.id
+    assert await scheduler.pending() == 1
+    score = await scheduler.control.zscore(scheduler.zset, resumed)
+    assert score is not None
+    assert score > await scheduler.now_ms()

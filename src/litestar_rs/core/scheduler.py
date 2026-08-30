@@ -10,7 +10,11 @@ from typing import Any
 
 from redis.asyncio import Redis
 
-from litestar_rs.core.cron import CronJob, next_fire_ms, occurrence_id
+from litestar_rs.core.cron import (
+    CronJob,
+    next_fire_ms,
+    occurrence_envelope,
+)
 from litestar_rs.core.envelope import Envelope, to_fields
 from litestar_rs.core.errors import ConfigurationError
 from litestar_rs.core.keys import (
@@ -98,17 +102,11 @@ class RedisScheduler:
             fire_ms = next_fire_ms(job, now)
             if fire_ms is None:
                 continue
-            job_id = occurrence_id(job, fire_ms)
-            envelope = Envelope(
-                id=job_id,
-                task=job.task,
-                payload=job.payload,
-                enqueued_at=fire_ms,
-            )
+            envelope = occurrence_envelope(job, fire_ms)
             await self.schedule_at(
-                envelope, queue=job.queue, when_ms=fire_ms, scheduled_id=job_id
+                envelope, queue=job.queue, when_ms=fire_ms, scheduled_id=envelope.id
             )
-            scheduled.append(job_id)
+            scheduled.append(envelope.id)
         return scheduled
 
     async def promote(self, *, limit: int = 100) -> list[bytes]:

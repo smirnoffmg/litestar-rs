@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from cronsim import CronSim, CronSimError
 
+from litestar_rs.core.envelope import Envelope
 from litestar_rs.core.errors import ConfigurationError
 
 
@@ -68,3 +69,17 @@ def occurrence_id(job: CronJob, fire_ms: int) -> str:
     it twice is a no-op rather than a duplicate job.
     """
     return f"cron:{job.name}:{fire_ms}"
+
+
+def occurrence_envelope(job: CronJob, fire_ms: int) -> Envelope:
+    """Build the entry for one occurrence.
+
+    ``enqueued_at`` is the instant the job was due, not the instant it reached
+    the stream, so a run delayed by an outage can be recognised as late.
+    """
+    return Envelope(
+        id=occurrence_id(job, fire_ms),
+        task=job.task,
+        payload=job.payload,
+        enqueued_at=fire_ms,
+    )
