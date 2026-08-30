@@ -116,4 +116,5 @@ class Pending(msgspec.Struct, frozen=True):
 
     stream: str
     entry_id: bytes
+    consumer: str
     times_delivered: int

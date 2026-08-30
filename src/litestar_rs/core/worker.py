@@ -88,6 +88,12 @@ class Slots:
 
     ids: set[bytes] = field(default_factory=set)
     unhandled: set[bytes] = field(default_factory=set)
+    recoverable: set[bytes] = field(default_factory=set)
+    """Entries this consumer name left behind in an earlier run.
+
+    Everything else owned by our own name is either running right now or was
+    handed to us microseconds ago and has not reached ``ids`` yet.
+    """
     freed: anyio.Event = field(default_factory=anyio.Event)
 
     def take(self, entry_ids: list[bytes]) -> None:
@@ -130,6 +136,7 @@ async def run(
     slots = Slots()
 
     await transport.ensure_group()
+    slots.recoverable = await _orphans_of_previous_run(transport, cfg)
 
     async with anyio.create_task_group() as supervisors:
         supervisors.start_soon(_heartbeat_loop, transport, slots, cfg, sleep)
@@ -159,6 +166,21 @@ async def run(
             handlers.cancel_scope.deadline = anyio.current_time() + cfg.drain_timeout_s
 
         supervisors.cancel_scope.cancel()
+
+
+async def _orphans_of_previous_run(
+    transport: StreamTransport, cfg: WorkerConfig
+) -> set[bytes]:
+    """Entries still pending under our own consumer name before we read anything.
+
+    Nothing has been delivered to this process yet, so whatever Redis already
+    lists against our name belongs to a run that died. Those we may take back;
+    anything our name acquires later we must not, because an entry enters the
+    pending list the moment Redis serves XREADGROUP, which is before the reply
+    reaches us and therefore before we can record it as in flight.
+    """
+    pending = await transport.pending(count=cfg.concurrency, min_idle_ms=0)
+    return {entry.entry_id for entry in pending if entry.consumer == transport.consumer}
 
 
 async def _consume_loop(
@@ -353,8 +375,17 @@ async def _reclaim_loop(
             # Skipping our own in-flight ids is not an optimisation. The alive key
             # is written one await after the read, and reclaiming inside that
             # window would hand this worker its own entry a second time.
-            if candidate.entry_id in slots.ids or candidate.entry_id in slots.unhandled:
+            if candidate.entry_id in slots.unhandled:
                 continue
+            if candidate.entry_id in slots.ids:
+                continue
+            if candidate.consumer == transport.consumer and (
+                candidate.entry_id not in slots.recoverable
+            ):
+                # Ours, and not left over from a previous run: either running now
+                # or served to us so recently that the reply has not landed.
+                continue
+            slots.recoverable.discard(candidate.entry_id)
             records = await transport.reclaim(
                 candidate.stream,
                 candidate.entry_id,

@@ -41,6 +41,10 @@ class RedisStreamsTransport:
     Takes two clients on purpose: a blocking ``XREADGROUP`` occupies its connection
     for the whole block window, and an ack or a liveness refresh queued behind it
     makes a healthy worker look dead to its peers.
+
+    ``consumer`` must be unique per running worker. Redis groups entries in the
+    pending list by consumer name, and reclaim uses that name to tell its own
+    work from a peer's.
     """
 
     def __init__(
@@ -241,6 +245,7 @@ class RedisStreamsTransport:
                 Pending(
                     stream=stream,
                     entry_id=_as_bytes(entry["message_id"]),
+                    consumer=_as_bytes(entry["consumer"]).decode(),
                     times_delivered=int(entry["times_delivered"]),
                 )
                 for entry in entries

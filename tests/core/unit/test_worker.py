@@ -55,10 +55,13 @@ def record(entry_id: bytes, task: str = "reindex") -> Record:
     )
 
 
-def pending(entry_id: bytes, times_delivered: int = 1) -> Pending:
+def pending(
+    entry_id: bytes, times_delivered: int = 1, consumer: str = "peer"
+) -> Pending:
     return Pending(
         stream="{lrs}:q:default:0",
         entry_id=entry_id,
+        consumer=consumer,
         times_delivered=times_delivered,
     )
 
@@ -123,6 +126,8 @@ class FakeTransport:
         self.trimmed = 0
         self.buried: list[tuple[bytes, str, str]] = []
         self.events: list[str] = []
+
+    consumer = "worker-1"
 
     def queue_of(self, stream: str) -> str:
         return "default"
@@ -594,3 +599,51 @@ async def test_reclaim_never_takes_back_our_own_in_flight_entry() -> None:
         )
 
     assert spawned == []
+
+
+async def test_we_never_reclaim_an_entry_redis_just_served_us() -> None:
+    """An entry enters the pending list when Redis serves XREADGROUP.
+
+    That is before the reply reaches us, so there is a window with no in-flight
+    record and no liveness key yet. Ownership closes it: the entry is ours, and
+    we did not inherit it from a previous run.
+    """
+    transport = FakeTransport(
+        pending=[pending(b"7-0", consumer="worker-1")], claimable={b"7-0"}
+    )
+    spawned: list[bytes] = []
+    sleep = stop_after(1)
+
+    with pytest.raises(_StopLoop):
+        await _reclaim_loop(
+            transport,
+            Slots(),
+            WorkerConfig(concurrency=4),
+            sleep,  # type: ignore[arg-type]
+            lambda rec: spawned.append(rec.entry_id),
+        )
+
+    assert spawned == []
+
+
+async def test_entries_left_by_a_previous_run_are_taken_back() -> None:
+    """A restarted worker under the same name must still recover its own work."""
+    transport = FakeTransport(
+        pending=[pending(b"7-0", consumer="worker-1")], claimable={b"7-0"}
+    )
+    slots = Slots()
+    slots.recoverable = {b"7-0"}
+    spawned: list[bytes] = []
+    sleep = stop_after(1)
+
+    with pytest.raises(_StopLoop):
+        await _reclaim_loop(
+            transport,
+            slots,
+            WorkerConfig(concurrency=4),
+            sleep,  # type: ignore[arg-type]
+            lambda rec: spawned.append(rec.entry_id),
+        )
+
+    assert spawned == [b"7-0"]
+    assert slots.recoverable == set(), "taken once, not on every pass"
