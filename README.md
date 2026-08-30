@@ -36,6 +36,7 @@ suite.
 ## Quick start
 
 ```python
+from dataclasses import dataclass
 from uuid import UUID, uuid4
 
 from litestar import Litestar, post
@@ -46,9 +47,18 @@ from litestar_rs.plugin import QueueConfig, QueuePlugin, TaskRegistry
 tasks = TaskRegistry()
 
 
+@dataclass
+class Settings:
+    index_name: str = "documents"
+
+
+def settings() -> Settings:
+    return Settings()
+
+
 @tasks.task
-async def reindex(doc_id: UUID, session: AsyncSession) -> None:
-    ...
+async def reindex(doc_id: UUID, settings: Settings) -> None:
+    """`doc_id` is serialised; `settings` comes from the application."""
 
 
 @post("/documents")
@@ -59,13 +69,14 @@ async def create() -> str:
 
 app = Litestar(
     route_handlers=[create],
-    dependencies={"session": Provide(session)},
+    dependencies={"settings": Provide(settings, sync_to_thread=False)},
     plugins=[QueuePlugin(QueueConfig(registry=tasks, redis_url="redis://localhost"))],
 )
 ```
 
-`doc_id` travels in the payload and `session` is injected in the worker, from
-the application's own dependency graph. There is no context dictionary.
+`doc_id` travels in the payload; `settings` is injected in the worker from the
+application's own dependency graph, and a real one would be a database session
+or a client. There is no context dictionary.
 
 ## Workers
 

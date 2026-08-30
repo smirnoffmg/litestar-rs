@@ -103,14 +103,8 @@ request: `sync_to_thread`, `use_cache`, generator dependencies with correct
 teardown. A provider that genuinely needs a request or headers is an error at
 worker startup, not at runtime. The target shape of a task:
 
+<!-- docs-test: skip -- names the reader's own session and settings types -->
 ```python
-from uuid import UUID
-
-from litestar_rs.plugin import TaskRegistry
-
-tasks = TaskRegistry()
-
-
 @tasks.task
 async def reindex(doc_id: UUID, db: AsyncSession, cfg: Settings) -> None: ...
 ```

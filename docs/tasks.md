@@ -14,6 +14,14 @@ from litestar.di import Provide
 from litestar_rs.plugin import QueueConfig, QueuePlugin, TaskRegistry
 
 tasks = TaskRegistry()
+
+
+class AsyncSession:
+    """Stands in for your database session, or whatever you inject."""
+
+
+class Settings:
+    """And for your configuration object."""
 ```
 
 ```python

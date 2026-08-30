@@ -86,10 +86,6 @@ is exempt, and a marker cannot silently start matching a different block.
 """
 
 APPLICATION_STUBS = '''
-class AsyncSession: ...
-class Settings: ...
-async def session() -> AsyncSession: return AsyncSession()
-def settings() -> Settings: return Settings()  # noqa: E704
 
 
 class _Whatever:
