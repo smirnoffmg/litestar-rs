@@ -986,3 +986,69 @@ async def test_a_failed_read_does_not_leak_slots() -> None:
     await _consume_loop(transport, slots, WorkerConfig(), stop, lambda rec: None, sleep)
 
     assert slots.ids == set()
+
+
+async def test_a_failure_while_handling_a_failure_leaves_the_entry_pending() -> None:
+    """The recovery path runs on the same connection that just died."""
+    transport = FakeTransport()
+    scheduler = FakeScheduler()
+    slots = Slots()
+    slots.take([b"1-0"])
+
+    async def ack(stream: str, entry_ids: Sequence[bytes]) -> int:
+        raise ConnectionError("connection closed by server")
+
+    async def now_ms() -> int:
+        raise ConnectionError("connection closed by server")
+
+    transport.ack = ack  # type: ignore[method-assign]
+    scheduler.now_ms = now_ms  # type: ignore[method-assign]
+
+    async def handler(envelope: Envelope) -> None:
+        return None
+
+    await _run_one(
+        transport,
+        scheduler,
+        None,
+        {"reindex": handler},
+        {},
+        slots,
+        WorkerConfig(),
+        record(b"1-0"),
+    )
+
+    assert scheduler.scheduled == []
+    assert transport.buried == []
+    assert slots.ids == set(), "the slot must come back even when recovery fails"
+
+
+async def test_a_broker_ack_failure_is_not_routed_through_the_retry_path() -> None:
+    """A foreign record has no envelope; rescheduling it would fail on decode."""
+    transport = FakeTransport()
+    transport.external.add("orders")
+    scheduler = FakeScheduler()
+    slots = Slots()
+    slots.take([b"1-0"])
+
+    async def ack(stream: str, entry_ids: Sequence[bytes]) -> int:
+        raise ConnectionError("connection closed by server")
+
+    transport.ack = ack  # type: ignore[method-assign]
+
+    async def on_order(entry: Record) -> None:
+        return None
+
+    await _run_one(
+        transport,
+        scheduler,
+        None,
+        {},
+        {"orders": on_order},
+        slots,
+        WorkerConfig(),
+        Record(stream="orders", entry_id=b"1-0", fields={b"sku": b"A1"}),
+    )
+
+    assert scheduler.scheduled == []
+    assert slots.ids == set()

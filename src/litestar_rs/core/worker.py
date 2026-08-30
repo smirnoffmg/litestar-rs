@@ -277,7 +277,19 @@ async def _run_one(
         raise
     except Exception as exc:
         logger.exception("task from entry %r failed", record.entry_id)
-        await _retry_or_bury(transport, scheduler, results, cfg, record, exc)
+        if transport.is_external(record.stream):
+            # Not ours to rewrite; redelivery is the only retry it has.
+            return
+        try:
+            await _retry_or_bury(transport, scheduler, results, cfg, record, exc)
+        except Exception:
+            # Recovery failed too -- usually the same connection that just died.
+            # Leaving the entry unacked is the safe outcome: it stays in the
+            # pending list and reclaim is exactly the mechanism for that.
+            logger.exception(
+                "could not reschedule entry %r, leaving it pending",
+                record.entry_id,
+            )
     finally:
         slots.release(record.entry_id)
 
