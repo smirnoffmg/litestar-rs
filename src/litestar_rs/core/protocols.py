@@ -3,6 +3,7 @@
 from collections.abc import Awaitable, Callable, Iterable, Sequence
 from typing import Protocol
 
+from litestar_rs.core.cron import CronJob
 from litestar_rs.core.envelope import Envelope, Record
 
 
@@ -47,6 +48,15 @@ class StreamTransport(Protocol):
         self, stream: str, entry_id: bytes, *, min_idle_ms: int, ttl_ms: int
     ) -> list[Record]: ...
     async def trim(self, *, retention_ms: int) -> None: ...
+
+
+class Scheduler(Protocol):
+    """What the worker needs from a scheduler, and nothing more."""
+
+    async def hold_leadership(self, token: str, *, ttl_ms: int) -> bool: ...
+    async def release_leadership(self, token: str) -> bool: ...
+    async def schedule_cron(self, jobs: Sequence[CronJob]) -> list[str]: ...
+    async def promote(self, *, limit: int = 100) -> list[bytes]: ...
 
 
 class TaskHandler(Protocol):

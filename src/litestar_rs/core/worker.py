@@ -8,14 +8,21 @@ sees no heartbeat API at all, so it cannot get this wrong.
 
 import logging
 import signal
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
+from uuid import uuid4
 
 import anyio
 
+from litestar_rs.core.cron import CronJob
 from litestar_rs.core.envelope import Record, from_fields
 from litestar_rs.core.errors import ConfigurationError, MalformedEnvelope
-from litestar_rs.core.protocols import Sleeper, StreamTransport, TaskHandler
+from litestar_rs.core.protocols import (
+    Scheduler,
+    Sleeper,
+    StreamTransport,
+    TaskHandler,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +38,9 @@ class WorkerConfig:
     trim_interval_s: float = 60.0
     retention_ms: int = 24 * 60 * 60 * 1000
     drain_timeout_s: float = 30.0
+    leader_ttl_ms: int = 15_000
+    scheduler_interval_s: float = 1.0
+    promote_limit: int = 100
 
     def __post_init__(self) -> None:
         if self.concurrency < 1:
@@ -44,6 +54,12 @@ class WorkerConfig:
         if self.drain_timeout_s < 0:
             raise ConfigurationError(
                 f"drain_timeout_s must not be negative, got {self.drain_timeout_s}"
+            )
+        if self.leader_ttl_ms <= self.scheduler_interval_s * 1000:
+            raise ConfigurationError(
+                f"leader_ttl_ms ({self.leader_ttl_ms}) must outlast "
+                f"scheduler_interval_s ({self.scheduler_interval_s}s), or the lease "
+                "lapses between passes and leadership flaps"
             )
 
     @property
@@ -101,6 +117,8 @@ async def run(
     *,
     sleep: Sleeper = anyio.sleep,
     shutdown: anyio.Event | None = None,
+    scheduler: Scheduler | None = None,
+    cron: Sequence[CronJob] = (),
 ) -> None:
     cfg = config or WorkerConfig()
     stop = shutdown or anyio.Event()
@@ -111,6 +129,8 @@ async def run(
     async with anyio.create_task_group() as supervisors:
         supervisors.start_soon(_heartbeat_loop, transport, slots, cfg, sleep)
         supervisors.start_soon(_trim_loop, transport, cfg, sleep)
+        if scheduler is not None:
+            supervisors.start_soon(_scheduler_loop, scheduler, cron, cfg, sleep)
 
         reclaiming = anyio.CancelScope()
 
@@ -222,7 +242,10 @@ async def _reclaim_loop(
         free = credits(cfg.concurrency, len(slots.ids))
         candidates = await transport.pending(count=free, min_idle_ms=cfg.min_idle_ms)
         for stream, entry_id in candidates:
-            if entry_id in slots.unhandled:
+            # Skipping our own in-flight ids is not an optimisation. The alive key
+            # is written one await after the read, and reclaiming inside that
+            # window would hand this worker its own entry a second time.
+            if entry_id in slots.ids or entry_id in slots.unhandled:
                 continue
             records = await transport.reclaim(
                 stream,
@@ -236,6 +259,30 @@ async def _reclaim_loop(
             for record in records:
                 spawn(record)
         await sleep(cfg.reclaim_interval_s)
+
+
+async def _scheduler_loop(
+    scheduler: Scheduler,
+    cron: Sequence[CronJob],
+    cfg: WorkerConfig,
+    sleep: Sleeper,
+) -> None:
+    """Promote due jobs while this worker holds the lease.
+
+    A lost lease is not an error: the new holder resumes from the same ZSET, and
+    the promotion script makes a double pass a no-op.
+    """
+    token = uuid4().hex
+    try:
+        while True:
+            if await scheduler.hold_leadership(token, ttl_ms=cfg.leader_ttl_ms):
+                if cron:
+                    await scheduler.schedule_cron(cron)
+                await scheduler.promote(limit=cfg.promote_limit)
+            await sleep(cfg.scheduler_interval_s)
+    finally:
+        with anyio.CancelScope(shield=True):
+            await scheduler.release_leadership(token)
 
 
 async def _trim_loop(

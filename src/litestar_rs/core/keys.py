@@ -5,6 +5,8 @@ land in one Cluster slot: multi-key ``XREADGROUP`` and the Lua scripts require i
 The schema cannot be changed after the first release without a data migration.
 """
 
+import zlib
+
 from litestar_rs.core.errors import ConfigurationError
 
 _FORBIDDEN = ("{", "}", ":")
@@ -37,6 +39,12 @@ def stream_keys(namespace: str, queue: str, shards: int) -> list[str]:
     return [stream_key(namespace, queue, shard) for shard in range(shards)]
 
 
+def stream_for(namespace: str, queue: str, shards: int, routing_key: str) -> str:
+    """Pick a shard deterministically, so one routing key always lands in one stream."""
+    streams = stream_keys(namespace, queue, shards)
+    return streams[zlib.crc32(routing_key.encode()) % len(streams)]
+
+
 def alive_key(namespace: str, entry_id: bytes | str) -> str:
     if isinstance(entry_id, bytes):
         entry_id = entry_id.decode("ascii")
@@ -49,6 +57,14 @@ def dedup_key(namespace: str, key: str) -> str:
 
 def sched_key(namespace: str) -> str:
     return f"{{{namespace}}}:sched"
+
+
+def sched_job_key(namespace: str, scheduled_id: str) -> str:
+    return f"{{{namespace}}}:sched:job:{scheduled_id}"
+
+
+def leader_key(namespace: str) -> str:
+    return f"{{{namespace}}}:leader"
 
 
 def dlq_key(namespace: str) -> str:

@@ -9,7 +9,7 @@ from redis.commands.core import AsyncScript
 
 from litestar_rs.core.envelope import Record
 
-SCRIPT_NAMES = ("ack", "reclaim")
+SCRIPT_NAMES = ("ack", "reclaim", "promote", "renew_leader", "release_leader")
 
 
 def load_script(name: str) -> str:
@@ -17,15 +17,30 @@ def load_script(name: str) -> str:
 
 
 @dataclass(frozen=True, slots=True)
-class Scripts:
+class TransportScripts:
     ack: AsyncScript
     reclaim: AsyncScript
 
 
-def register(client: Redis) -> Scripts:
-    return Scripts(
+@dataclass(frozen=True, slots=True)
+class SchedulerScripts:
+    promote: AsyncScript
+    renew_leader: AsyncScript
+    release_leader: AsyncScript
+
+
+def register_transport(client: Redis) -> TransportScripts:
+    return TransportScripts(
         ack=client.register_script(load_script("ack")),
         reclaim=client.register_script(load_script("reclaim")),
+    )
+
+
+def register_scheduler(client: Redis) -> SchedulerScripts:
+    return SchedulerScripts(
+        promote=client.register_script(load_script("promote")),
+        renew_leader=client.register_script(load_script("renew_leader")),
+        release_leader=client.register_script(load_script("release_leader")),
     )
 
 

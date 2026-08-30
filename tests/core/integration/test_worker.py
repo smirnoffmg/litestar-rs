@@ -10,6 +10,7 @@ import anyio
 import pytest
 
 from litestar_rs.core.envelope import Envelope
+from litestar_rs.core.scheduler import RedisScheduler
 from litestar_rs.core.transport import RedisStreamsTransport
 from litestar_rs.core.worker import WorkerConfig, run
 
@@ -32,6 +33,7 @@ def config(**overrides: object) -> WorkerConfig:
         "min_idle_ms": 0,
         "reclaim_interval_s": 0.05,
         "trim_interval_s": 60.0,
+        "scheduler_interval_s": 0.05,
     }
     return WorkerConfig(**(base | overrides))  # type: ignore[arg-type]  # test factory
 
@@ -186,3 +188,39 @@ async def test_sigterm_stops_the_process_on_its_own(
 
     assert worker.returncode == 0
     assert await transport.control.xlen(transport.streams[0]) == 0
+
+
+async def test_a_delayed_job_runs_end_to_end(
+    transport: RedisStreamsTransport, scheduler: RedisScheduler
+) -> None:
+    """Schedule, promote, consume, ack -- with no separate scheduler process."""
+    due = await scheduler.now_ms() - 1
+    await scheduler.schedule_at(envelope(), queue=transport.queue, when_ms=due)
+
+    stop = anyio.Event()
+    ran = anyio.Event()
+    seen: list[str] = []
+
+    async def handler(env: Envelope) -> None:
+        seen.append(env.id)
+        ran.set()
+
+    with anyio.fail_after(30):
+        async with anyio.create_task_group() as tg:
+            tg.start_soon(
+                partial(
+                    run,
+                    transport,
+                    {"reindex": handler},
+                    config(),
+                    shutdown=stop,
+                    scheduler=scheduler,
+                )
+            )
+            await ran.wait()
+            stop.set()
+
+    assert seen == ["job-1"]
+    assert await scheduler.pending() == 0
+    assert await transport.control.xlen(transport.streams[0]) == 0
+    assert await scheduler.control.exists(scheduler.leader) == 0

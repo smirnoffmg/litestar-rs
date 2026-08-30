@@ -1,6 +1,5 @@
 """The only module that talks to redis-py."""
 
-import zlib
 from collections.abc import Iterable, Sequence
 from typing import Any
 
@@ -11,11 +10,16 @@ from litestar_rs.core.envelope import Envelope, Record, to_fields
 from litestar_rs.core.errors import ConfigurationError, PayloadTooLarge
 from litestar_rs.core.keys import (
     alive_key,
+    stream_for,
     stream_keys,
     validate_namespace,
     validate_queue,
 )
-from litestar_rs.core.scripts import Scripts, parse_xclaim_reply, register
+from litestar_rs.core.scripts import (
+    TransportScripts,
+    parse_xclaim_reply,
+    register_transport,
+)
 
 DEFAULT_NAMESPACE = "lrs"
 DEFAULT_QUEUE = "default"
@@ -89,12 +93,7 @@ class RedisStreamsTransport:
         self.block_ms = block_ms
         self.max_payload_bytes = max_payload_bytes
         self.streams = stream_keys(self.namespace, self.queue, shards)
-        self._scripts: Scripts = register(control)
-
-    def stream_for(self, routing_key: str) -> str:
-        """Pick a shard deterministically, so a key always lands in one stream."""
-        digest = zlib.crc32(routing_key.encode())
-        return self.streams[digest % len(self.streams)]
+        self._scripts: TransportScripts = register_transport(control)
 
     def alive_key(self, entry_id: bytes) -> str:
         return alive_key(self.namespace, entry_id)
@@ -116,8 +115,9 @@ class RedisStreamsTransport:
                 f"over the {self.max_payload_bytes} byte limit; "
                 "store it out of band and enqueue a payload_ref instead"
             )
-        streams = stream_keys(self.namespace, validate_queue(queue), len(self.streams))
-        stream = streams[zlib.crc32(envelope.id.encode()) % len(streams)]
+        stream = stream_for(
+            self.namespace, validate_queue(queue), len(self.streams), envelope.id
+        )
         fields: dict[Any, Any] = dict(to_fields(envelope))
         entry_id = await self.control.xadd(stream, fields)
         return _as_bytes(entry_id)

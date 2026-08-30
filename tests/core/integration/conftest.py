@@ -7,6 +7,7 @@ import pytest
 from redis.asyncio import Redis
 from testcontainers.community.redis import RedisContainer
 
+from litestar_rs.core.scheduler import RedisScheduler
 from litestar_rs.core.transport import RedisStreamsTransport
 
 # Lowest version we support: XINFO GROUPS reports `lag` from Redis 7 on.
@@ -70,3 +71,29 @@ async def transport(
     transports: Callable[[str], Awaitable[RedisStreamsTransport]],
 ) -> RedisStreamsTransport:
     return await transports("worker-1")
+
+
+@pytest.fixture
+async def schedulers(
+    redis_url: str, namespace: str
+) -> AsyncIterator[Callable[[], Awaitable[RedisScheduler]]]:
+    """Independent schedulers over one namespace, to race them against each other."""
+    clients: list[Redis] = []
+
+    async def make() -> RedisScheduler:
+        control = Redis.from_url(redis_url)
+        clients.append(control)
+        return RedisScheduler(control=control, namespace=namespace)
+
+    try:
+        yield make
+    finally:
+        for client in clients:
+            await client.aclose()
+
+
+@pytest.fixture
+async def scheduler(
+    schedulers: Callable[[], Awaitable[RedisScheduler]],
+) -> RedisScheduler:
+    return await schedulers()

@@ -10,6 +10,7 @@ from collections.abc import Iterable, Sequence
 import anyio
 import pytest
 
+from litestar_rs.core.cron import CronJob
 from litestar_rs.core.envelope import Envelope, Record, to_fields
 from litestar_rs.core.errors import ConfigurationError
 from litestar_rs.core.worker import (
@@ -19,6 +20,7 @@ from litestar_rs.core.worker import (
     _heartbeat_loop,
     _reclaim_loop,
     _run_one,
+    _scheduler_loop,
     credits,
     run,
 )
@@ -370,3 +372,89 @@ async def test_undecodable_entry_is_handed_back() -> None:
     assert transport.acked == []
     assert transport.cleared == [[b"1-0"]]
     assert slots.unhandled == {b"1-0"}
+
+
+class FakeScheduler:
+    def __init__(self, *, lead: bool = True) -> None:
+        self.lead = lead
+        self.promotions = 0
+        self.cron_passes = 0
+        self.released: list[str] = []
+        self.tokens: list[str] = []
+
+    async def hold_leadership(self, token: str, *, ttl_ms: int) -> bool:
+        self.tokens.append(token)
+        return self.lead
+
+    async def release_leadership(self, token: str) -> bool:
+        self.released.append(token)
+        return True
+
+    async def schedule_cron(self, jobs: Sequence[CronJob]) -> list[str]:
+        self.cron_passes += 1
+        return []
+
+    async def promote(self, *, limit: int = 100) -> list[bytes]:
+        self.promotions += 1
+        return []
+
+
+def test_leader_lease_must_outlast_the_scheduler_interval() -> None:
+    """A lease shorter than the pass makes leadership flap between workers."""
+    with pytest.raises(ConfigurationError, match="leader_ttl_ms"):
+        WorkerConfig(leader_ttl_ms=1_000, scheduler_interval_s=5.0)
+
+
+async def test_the_leader_promotes_every_pass() -> None:
+    scheduler = FakeScheduler(lead=True)
+    job = CronJob(name="nightly", expression="30 2 * * *", task="reindex")
+    sleep = stop_after(3)
+
+    with pytest.raises(_StopLoop):
+        await _scheduler_loop(scheduler, [job], WorkerConfig(), sleep)  # type: ignore[arg-type]
+
+    assert scheduler.promotions == 3
+    assert scheduler.cron_passes == 3
+
+
+async def test_a_follower_promotes_nothing() -> None:
+    scheduler = FakeScheduler(lead=False)
+    sleep = stop_after(2)
+
+    with pytest.raises(_StopLoop):
+        await _scheduler_loop(scheduler, [], WorkerConfig(), sleep)  # type: ignore[arg-type]
+
+    assert scheduler.promotions == 0
+
+
+async def test_leadership_is_released_when_the_loop_ends() -> None:
+    """Otherwise a stopped worker holds the lease until its TTL runs out."""
+    scheduler = FakeScheduler(lead=True)
+    sleep = stop_after(1)
+
+    with pytest.raises(_StopLoop):
+        await _scheduler_loop(scheduler, [], WorkerConfig(), sleep)  # type: ignore[arg-type]
+
+    assert scheduler.released == scheduler.tokens[:1]
+
+
+async def test_reclaim_never_takes_back_our_own_in_flight_entry() -> None:
+    """The alive key is set one await after the read; that window must be shut."""
+    transport = FakeTransport(
+        pending=[("{lrs}:q:default:0", b"7-0")], claimable={b"7-0"}
+    )
+    slots = Slots()
+    slots.take([b"7-0"])
+    spawned: list[bytes] = []
+    sleep = stop_after(1)
+
+    with pytest.raises(_StopLoop):
+        await _reclaim_loop(
+            transport,
+            slots,
+            WorkerConfig(concurrency=4),
+            sleep,  # type: ignore[arg-type]
+            lambda rec: spawned.append(rec.entry_id),
+        )
+
+    assert spawned == []
