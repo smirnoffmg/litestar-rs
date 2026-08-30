@@ -40,9 +40,13 @@ directly, they go to `run(...)` or `run_with_signals(...)` as `brokers=`.
 - **No re-enqueue on failure.** The stream is not yours to write to, so a failing
   handler simply does not ack. Redelivery is the retry, and the delivery ceiling
   is what eventually moves a poisonous entry to the dead letter queue.
-- **A separate read.** Foreign stream names carry none of your hash tag, so they
-  are read in their own `XREADGROUP`. Joining them to yours would break the
-  moment anyone runs this on a cluster.
+- **A separate read, and a latency floor with it.** Foreign stream names carry
+  none of your hash tag, so they are read in their own `XREADGROUP`. Joining
+  them to yours would break the moment anyone runs this on a cluster — but it
+  also means a foreign stream is only looked at between blocking reads of your
+  own queues, so an entry waits up to `block_ms` before it is seen. The default
+  is five seconds. Lower `block_ms` if broker latency matters; it costs more
+  round trips while the queues are idle.
 - **The group still applies.** `ensure_group` creates the consumer group on
   external streams too, so reclaim, liveness and the delivery ceiling work there
   exactly as they do on your own.

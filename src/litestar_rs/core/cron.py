@@ -19,7 +19,9 @@ class CronJob:
     name: str
     expression: str
     task: str
-    payload: bytes = b"null"
+    payload: bytes = b"{}"
+    """Encoded arguments. An empty object, not null: it decodes into the task's
+    argument struct, and a task taking nothing still has one."""
     queue: str = "default"
     timezone: str = "UTC"
 

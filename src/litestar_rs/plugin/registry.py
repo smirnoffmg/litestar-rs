@@ -52,6 +52,12 @@ class BoundTask:
     function: Callable[..., Awaitable[None]]
     payload_type: type[msgspec.Struct]
     payload_fields: tuple[str, ...]
+    injected: tuple[str, ...]
+    """Dependencies this task's own signature names.
+
+    Not the same as the plan: resolving `session` may require `settings`, and the
+    task asked for neither of those on its behalf.
+    """
     plan: DependencyPlan
     is_async: bool
     timeout_s: float | None
@@ -250,8 +256,9 @@ class TaskRegistry:
         payload = {field: getattr(arguments, field) for field in task.payload_fields}
         token = current_traceparent.set(envelope.traceparent)
         try:
-            async with resolved(task.plan) as injected:
-                return await self._call(task, {**payload, **injected})
+            async with resolved(task.plan) as resolved_values:
+                given = {name: resolved_values[name] for name in task.injected}
+                return await self._call(task, {**payload, **given})
         finally:
             current_traceparent.reset(token)
 
@@ -307,6 +314,7 @@ def _bind(task: Task[Any], dependencies: Mapping[str, Provide]) -> BoundTask:
         function=task.function,
         payload_type=msgspec.defstruct(f"{task.name}_payload", fields),
         payload_fields=tuple(field[0] for field in fields),
+        injected=tuple(injected),
         plan=plan_dependencies(injected, dependencies, task=task.name),
         is_async=is_async,
         timeout_s=task.timeout_s,

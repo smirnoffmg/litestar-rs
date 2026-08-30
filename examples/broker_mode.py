@@ -4,6 +4,9 @@ The same worker process and the same consumer group handle both your own tasks
 and the foreign stream. Broker handlers are dispatched by stream, not by task
 name, and get the record exactly as Redis returned it -- there is no envelope,
 because the payload is in a format you did not choose.
+
+A foreign stream is read between blocking reads of your own queues, so an entry
+waits up to `block_ms` to be picked up. Lower it if that matters.
 """
 
 from __future__ import annotations

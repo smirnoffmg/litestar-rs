@@ -23,6 +23,15 @@ bytes rather than encoding them a second time to fit in a sorted-set member.
 
 ## Cron
 
+Arguments, if the task takes any, are the encoded payload:
+
+```python
+CronJob(name="trim", expression="0 3 * * *", task="trim",
+        payload=b'{"older_than_days": 30}')
+```
+
+A task taking no arguments needs nothing: the default is an empty object.
+
 ```python
 from litestar_rs import CronJob
 

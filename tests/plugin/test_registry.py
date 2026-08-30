@@ -6,6 +6,7 @@ from uuid import UUID, uuid4
 import pytest
 from litestar.di import Provide
 
+from litestar_rs.core.cron import CronJob, occurrence_envelope
 from litestar_rs.core.envelope import Envelope
 from litestar_rs.core.errors import ConfigurationError
 from litestar_rs.core.testing import CollectingEnqueuer
@@ -202,3 +203,81 @@ def test_an_unbound_task_is_reported_rather_than_missing() -> None:
 
     with pytest.raises(ConfigurationError, match="not bound"):
         registry.bound("reindex")
+
+
+async def test_a_task_receives_only_the_dependencies_it_named() -> None:
+    """Resolving one dependency may require others the task never asked for.
+
+    `search_client` needs `settings`; the task asked for `search_client` alone
+    and must be called with exactly that.
+    """
+    registry = TaskRegistry()
+    seen: list[tuple[str, ...]] = []
+
+    def settings() -> str:
+        return "cfg"
+
+    def search_client(settings: str) -> str:
+        return f"client({settings})"
+
+    @registry.task
+    async def reindex(doc_id: UUID, search_client: str) -> None:
+        seen.append((str(doc_id), search_client))
+
+    enqueuer = CollectingEnqueuer()
+    registry.bind(
+        {
+            "settings": Provide(settings, sync_to_thread=False),
+            "search_client": Provide(search_client, sync_to_thread=False),
+        },
+        enqueuer=enqueuer,
+    )
+    doc_id = uuid4()
+    await registry.enqueue("reindex", {"doc_id": doc_id})
+    [(envelope, _)] = enqueuer.enqueued
+
+    await registry.execute(envelope)
+
+    assert seen == [(str(doc_id), "client(cfg)")]
+    assert registry.bound("reindex").plan.order == ("settings", "search_client")
+    assert registry.bound("reindex").injected == ("search_client",)
+
+
+async def test_a_cron_job_with_no_arguments_decodes() -> None:
+    """A task taking nothing still has an argument struct, and null is not one."""
+    registry = TaskRegistry()
+    ran: list[int] = []
+
+    @registry.task
+    async def expire_sessions() -> None:
+        ran.append(1)
+
+    registry.bind({}, enqueuer=CollectingEnqueuer())
+    job = CronJob(
+        name="housekeeping", expression="*/15 * * * *", task="expire_sessions"
+    )
+
+    await registry.execute(occurrence_envelope(job, 1712345678901))
+
+    assert ran == [1]
+
+
+async def test_a_cron_job_can_carry_arguments() -> None:
+    registry = TaskRegistry()
+    seen: list[int] = []
+
+    @registry.task
+    async def trim(older_than_days: int) -> None:
+        seen.append(older_than_days)
+
+    registry.bind({}, enqueuer=CollectingEnqueuer())
+    job = CronJob(
+        name="trim",
+        expression="0 3 * * *",
+        task="trim",
+        payload=b'{"older_than_days": 30}',
+    )
+
+    await registry.execute(occurrence_envelope(job, 1712345678901))
+
+    assert seen == [30]
