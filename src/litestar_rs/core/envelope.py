@@ -28,6 +28,12 @@ class Envelope(msgspec.Struct, frozen=True, kw_only=True):
     payload_ref: str | None = None
     traceparent: str | None = None
     tracestate: str | None = None
+    history: tuple[str, ...] = ()
+    """One compact line per failed attempt, oldest first.
+
+    Bounded by the retry policy, and each line is truncated, so a job that keeps
+    failing cannot grow its own entry without limit.
+    """
 
 
 class JsonCodec:
@@ -56,6 +62,8 @@ def to_fields(envelope: Envelope) -> dict[bytes, bytes]:
     }
     # Redis has no null: an unset field is written as no field at all.
     fields.update({k: v.encode() for k, v in optional.items() if v is not None})
+    if envelope.history:
+        fields[b"history"] = "\n".join(envelope.history).encode()
     return fields
 
 
@@ -79,7 +87,9 @@ def from_fields(fields: Mapping[bytes, bytes]) -> Envelope:
     }
     # Unknown fields are ignored on purpose: a newer producer must not break an
     # older worker during a rolling deploy.
+    raw_history = fields.get(b"history")
     return Envelope(
+        history=tuple(raw_history.decode().split("\n")) if raw_history else (),
         id=fields[b"id"].decode(),
         task=fields[b"task"].decode(),
         payload=fields[b"payload"],
@@ -99,3 +109,11 @@ class Record(msgspec.Struct, frozen=True):
     stream: str
     entry_id: bytes
     fields: dict[bytes, bytes]
+
+
+class Pending(msgspec.Struct, frozen=True):
+    """One unacknowledged entry, as ``XPENDING`` describes it."""
+
+    stream: str
+    entry_id: bytes
+    times_delivered: int

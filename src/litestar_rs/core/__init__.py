@@ -5,6 +5,7 @@ from litestar_rs.core.envelope import (
     ENVELOPE_VERSION,
     Envelope,
     JsonCodec,
+    Pending,
     Record,
     from_fields,
     to_fields,
@@ -23,6 +24,7 @@ from litestar_rs.core.protocols import (
     StreamTransport,
     TaskHandler,
 )
+from litestar_rs.core.retry import RetryPolicy
 from litestar_rs.core.scheduler import RedisScheduler
 from litestar_rs.core.transport import RedisStreamsTransport
 from litestar_rs.core.worker import WorkerConfig, run, run_with_signals
@@ -38,9 +40,11 @@ __all__ = [
     "LitestarRsError",
     "MalformedEnvelope",
     "PayloadTooLarge",
+    "Pending",
     "Record",
     "RedisScheduler",
     "RedisStreamsTransport",
+    "RetryPolicy",
     "Scheduler",
     "Sleeper",
     "StreamTransport",

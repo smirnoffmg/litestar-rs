@@ -7,15 +7,18 @@ sees no heartbeat API at all, so it cannot get this wrong.
 """
 
 import logging
+import random
 import signal
+import traceback
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from uuid import uuid4
 
 import anyio
+from msgspec import structs
 
 from litestar_rs.core.cron import CronJob
-from litestar_rs.core.envelope import Record, from_fields
+from litestar_rs.core.envelope import Envelope, Record, from_fields
 from litestar_rs.core.errors import ConfigurationError, MalformedEnvelope
 from litestar_rs.core.protocols import (
     Scheduler,
@@ -23,6 +26,7 @@ from litestar_rs.core.protocols import (
     StreamTransport,
     TaskHandler,
 )
+from litestar_rs.core.retry import RetryPolicy
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +42,7 @@ class WorkerConfig:
     trim_interval_s: float = 60.0
     retention_ms: int = 24 * 60 * 60 * 1000
     drain_timeout_s: float = 30.0
+    retry: RetryPolicy = field(default_factory=RetryPolicy)
     leader_ttl_ms: int = 15_000
     scheduler_interval_s: float = 1.0
     promote_limit: int = 100
@@ -115,9 +120,9 @@ async def run(
     registry: Mapping[str, TaskHandler],
     config: WorkerConfig | None = None,
     *,
+    scheduler: Scheduler,
     sleep: Sleeper = anyio.sleep,
     shutdown: anyio.Event | None = None,
-    scheduler: Scheduler | None = None,
     cron: Sequence[CronJob] = (),
 ) -> None:
     cfg = config or WorkerConfig()
@@ -129,15 +134,16 @@ async def run(
     async with anyio.create_task_group() as supervisors:
         supervisors.start_soon(_heartbeat_loop, transport, slots, cfg, sleep)
         supervisors.start_soon(_trim_loop, transport, cfg, sleep)
-        if scheduler is not None:
-            supervisors.start_soon(_scheduler_loop, scheduler, cron, cfg, sleep)
+        supervisors.start_soon(_scheduler_loop, scheduler, cron, cfg, sleep)
 
         reclaiming = anyio.CancelScope()
 
         async with anyio.create_task_group() as handlers:
 
             def spawn(record: Record) -> None:
-                handlers.start_soon(_run_one, transport, registry, slots, record)
+                handlers.start_soon(
+                    _run_one, transport, scheduler, registry, slots, cfg, record
+                )
 
             async def reclaim() -> None:
                 with reclaiming:
@@ -181,24 +187,24 @@ async def _consume_loop(
 
 async def _run_one(
     transport: StreamTransport,
+    scheduler: Scheduler,
     registry: Mapping[str, TaskHandler],
     slots: Slots,
+    cfg: WorkerConfig,
     record: Record,
 ) -> None:
     try:
         try:
             envelope = from_fields(record.fields)
-        except MalformedEnvelope:
+        except MalformedEnvelope as exc:
+            # No deployment will ever decode this. Retrying is pure noise.
             logger.exception("undecodable entry %r", record.entry_id)
-            await _hand_over(transport, slots, record)
+            await _dead_letter(transport, record, reason="malformed", error=exc)
             return
 
         handler = registry.get(envelope.task)
         if handler is None:
-            # Another version of the app is mid-rollout and knows this task. Do
-            # not ack and do not DLQ: hand it back so a peer can run it.
-            logger.warning("unknown task %r, handing back", envelope.task)
-            await _hand_over(transport, slots, record)
+            await _hand_back_unknown(transport, scheduler, slots, cfg, record, envelope)
             return
 
         await handler(envelope)
@@ -209,18 +215,120 @@ async def _run_one(
         with anyio.CancelScope(shield=True):
             await transport.clear_alive([record.entry_id])
         raise
-    except Exception:
-        # Not acked. The alive key lapses and a peer reclaims it; retry counting
-        # and the DLQ threshold belong to the retry milestone.
+    except Exception as exc:
         logger.exception("task from entry %r failed", record.entry_id)
+        await _retry_or_bury(transport, scheduler, cfg, record, exc)
     finally:
         slots.release(record.entry_id)
 
 
-async def _hand_over(transport: StreamTransport, slots: Slots, record: Record) -> None:
-    """Give an entry back at once, and stop this worker from re-claiming it."""
+async def _retry_or_bury(
+    transport: StreamTransport,
+    scheduler: Scheduler,
+    cfg: WorkerConfig,
+    record: Record,
+    exc: BaseException,
+) -> None:
+    envelope = from_fields(record.fields)
+    attempt = envelope.attempt + 1
+    if cfg.retry.exhausted(attempt):
+        await _dead_letter(transport, record, reason="max_attempts", error=exc)
+        return
+
+    # Jitter keeps a batch that failed together from retrying together forever;
+    # it is spacing, not a secret, so the cheap generator is the right one.
+    draw = random.random()  # noqa: S311
+    delay = cfg.retry.delay_ms(envelope.attempt, rand=draw)
+    await _reschedule(
+        transport,
+        scheduler,
+        record,
+        structs.replace(
+            envelope,
+            attempt=attempt,
+            history=cfg.retry.record_failure(envelope.history, envelope.attempt, exc),
+        ),
+        delay_ms=delay,
+        scheduled_id=f"retry:{envelope.id}:{attempt}",
+    )
+
+
+async def _hand_back_unknown(
+    transport: StreamTransport,
+    scheduler: Scheduler,
+    slots: Slots,
+    cfg: WorkerConfig,
+    record: Record,
+    envelope: Envelope,
+) -> None:
+    """A rolling deploy is in progress and another version knows this task.
+
+    Not a failure, so the attempt counter is untouched. The threshold is time
+    rather than attempts: a deploy takes minutes, and counting tries would bury
+    perfectly good work halfway through one.
+    """
+    age_ms = await scheduler.now_ms() - envelope.enqueued_at
+    if cfg.retry.unknown_task_expired(age_ms=age_ms):
+        logger.error("task %r still unknown after %dms, burying", envelope.task, age_ms)
+        await _dead_letter(
+            transport, record, reason="unknown_task", error=None, detail=envelope.task
+        )
+        return
+
+    logger.warning("unknown task %r, deferring for a peer", envelope.task)
     slots.unhandled.add(record.entry_id)
-    await transport.clear_alive([record.entry_id])
+    await _reschedule(
+        transport,
+        scheduler,
+        record,
+        envelope,
+        delay_ms=cfg.retry.unknown_task_backoff_ms,
+        scheduled_id=f"unknown:{envelope.id}:{age_ms // 1000}",
+    )
+
+
+async def _reschedule(
+    transport: StreamTransport,
+    scheduler: Scheduler,
+    record: Record,
+    envelope: Envelope,
+    *,
+    delay_ms: int,
+    scheduled_id: str,
+) -> None:
+    """Put the work back on the clock, then let go of the current entry.
+
+    Scheduling before acking is deliberate. A crash in between duplicates the
+    job, which at-least-once already allows; the other order would lose it.
+    """
+    when_ms = await scheduler.now_ms() + delay_ms
+    await scheduler.schedule_at(
+        envelope,
+        queue=transport.queue,
+        when_ms=when_ms,
+        scheduled_id=scheduled_id,
+    )
+    await transport.ack(record.stream, [record.entry_id])
+
+
+async def _dead_letter(
+    transport: StreamTransport,
+    record: Record,
+    *,
+    reason: str,
+    error: BaseException | None,
+    detail: str = "",
+    times_delivered: int = 1,
+) -> None:
+    """Park it, then ack. Writing first means a crash cannot lose the evidence."""
+    if error is not None:
+        detail = "".join(
+            traceback.format_exception(type(error), error, error.__traceback__)
+        )
+    await transport.dead_letter(
+        record, reason=reason, detail=detail, times_delivered=times_delivered
+    )
+    await transport.ack(record.stream, [record.entry_id])
 
 
 async def _heartbeat_loop(
@@ -241,19 +349,37 @@ async def _reclaim_loop(
     while True:
         free = credits(cfg.concurrency, len(slots.ids))
         candidates = await transport.pending(count=free, min_idle_ms=cfg.min_idle_ms)
-        for stream, entry_id in candidates:
+        for candidate in candidates:
             # Skipping our own in-flight ids is not an optimisation. The alive key
             # is written one await after the read, and reclaiming inside that
             # window would hand this worker its own entry a second time.
-            if entry_id in slots.ids or entry_id in slots.unhandled:
+            if candidate.entry_id in slots.ids or candidate.entry_id in slots.unhandled:
                 continue
             records = await transport.reclaim(
-                stream,
-                entry_id,
+                candidate.stream,
+                candidate.entry_id,
                 min_idle_ms=cfg.min_idle_ms,
                 ttl_ms=cfg.alive_ttl_ms,
             )
             if not records:
+                continue
+            if cfg.retry.over_delivered(candidate.times_delivered):
+                # Taken from this many dead owners means the entry is killing
+                # whatever picks it up. Backing off would only spread the damage.
+                for record in records:
+                    logger.error(
+                        "entry %r delivered %d times, burying",
+                        record.entry_id,
+                        candidate.times_delivered,
+                    )
+                    await _dead_letter(
+                        transport,
+                        record,
+                        reason="max_deliveries",
+                        error=None,
+                        detail=f"delivered {candidate.times_delivered} times",
+                        times_delivered=candidate.times_delivered,
+                    )
                 continue
             slots.take([record.entry_id for record in records])
             for record in records:
@@ -297,12 +423,22 @@ async def run_with_signals(
     transport: StreamTransport,
     registry: Mapping[str, TaskHandler],
     config: WorkerConfig | None = None,
+    *,
+    scheduler: Scheduler,
+    cron: Sequence[CronJob] = (),
 ) -> None:
     """Run until SIGTERM or SIGINT; a second signal means now, not soon."""
     stop = anyio.Event()
     async with anyio.create_task_group() as tg:
         tg.start_soon(_watch_signals, stop, tg.cancel_scope)
-        await run(transport, registry, config, shutdown=stop)
+        await run(
+            transport,
+            registry,
+            config,
+            scheduler=scheduler,
+            cron=cron,
+            shutdown=stop,
+        )
         tg.cancel_scope.cancel()
 
 

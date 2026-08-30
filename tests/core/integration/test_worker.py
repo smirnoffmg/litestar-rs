@@ -5,11 +5,13 @@ import sys
 from collections.abc import Awaitable, Callable
 from functools import partial
 from pathlib import Path
+from typing import Any
 
 import anyio
 import pytest
 
 from litestar_rs.core.envelope import Envelope
+from litestar_rs.core.retry import RetryPolicy
 from litestar_rs.core.scheduler import RedisScheduler
 from litestar_rs.core.transport import RedisStreamsTransport
 from litestar_rs.core.worker import WorkerConfig, run
@@ -21,9 +23,9 @@ Make = Callable[[str], Awaitable[RedisStreamsTransport]]
 WORKER_MAIN = Path(__file__).parent / "_worker_main.py"
 
 
-def envelope() -> Envelope:
+def envelope(payload: bytes = b"{}") -> Envelope:
     return Envelope(
-        id="job-1", task="reindex", payload=b"{}", enqueued_at=1712345678901
+        id="job-1", task="reindex", payload=payload, enqueued_at=1712345678901
     )
 
 
@@ -39,7 +41,7 @@ def config(**overrides: object) -> WorkerConfig:
 
 
 async def test_completed_work_is_acked_on_graceful_shutdown(
-    transport: RedisStreamsTransport,
+    transport: RedisStreamsTransport, scheduler: RedisScheduler
 ) -> None:
     await transport.enqueue(envelope(), queue=transport.queue)
     stop = anyio.Event()
@@ -52,7 +54,14 @@ async def test_completed_work_is_acked_on_graceful_shutdown(
 
     async with anyio.create_task_group() as tg:
         tg.start_soon(
-            partial(run, transport, {"reindex": handler}, config(), shutdown=stop)
+            partial(
+                run,
+                transport,
+                {"reindex": handler},
+                config(),
+                scheduler=scheduler,
+                shutdown=stop,
+            )
         )
         await ran.wait()
         stop.set()
@@ -63,7 +72,7 @@ async def test_completed_work_is_acked_on_graceful_shutdown(
 
 @pytest.mark.slow
 async def test_watchdog_hands_back_work_it_had_to_cut_off(
-    transport: RedisStreamsTransport,
+    transport: RedisStreamsTransport, scheduler: RedisScheduler
 ) -> None:
     """Work cancelled by the drain watchdog is not an application failure.
 
@@ -86,6 +95,7 @@ async def test_watchdog_hands_back_work_it_had_to_cut_off(
                 transport,
                 {"reindex": handler},
                 config(drain_timeout_s=0.2),
+                scheduler=scheduler,
                 shutdown=stop,
             )
         )
@@ -105,6 +115,7 @@ async def test_watchdog_hands_back_work_it_had_to_cut_off(
 async def test_killed_worker_hands_its_entry_to_a_peer(
     transport: RedisStreamsTransport,
     transports: Make,
+    schedulers: Callable[[], Awaitable[RedisScheduler]],
     redis_url: str,
     namespace: str,
 ) -> None:
@@ -159,7 +170,14 @@ async def test_killed_worker_hands_its_entry_to_a_peer(
     with anyio.fail_after(30):
         async with anyio.create_task_group() as tg:
             tg.start_soon(
-                partial(run, survivor, {"reindex": handler}, config(), shutdown=stop)
+                partial(
+                    run,
+                    survivor,
+                    {"reindex": handler},
+                    config(),
+                    scheduler=await schedulers(),
+                    shutdown=stop,
+                )
             )
             await ran.wait()
             stop.set()
@@ -224,3 +242,90 @@ async def test_a_delayed_job_runs_end_to_end(
     assert await scheduler.pending() == 0
     assert await transport.control.xlen(transport.streams[0]) == 0
     assert await scheduler.control.exists(scheduler.leader) == 0
+
+
+def retrying(**overrides: int) -> WorkerConfig:
+    """Backoff compressed to nothing: what is under test is the path, not the wait."""
+    policy = RetryPolicy(
+        initial_backoff_ms=1, max_backoff_ms=2, jitter=0.0, **overrides
+    )
+    return config(retry=policy)
+
+
+async def test_a_failing_task_comes_back_with_its_attempt_counted(
+    transport: RedisStreamsTransport, scheduler: RedisScheduler
+) -> None:
+    await transport.enqueue(envelope(), queue=transport.queue)
+    attempts: list[int] = []
+    ran_twice = anyio.Event()
+    stop = anyio.Event()
+
+    async def handler(envelope_: Envelope) -> None:
+        attempts.append(envelope_.attempt)
+        if len(attempts) == 1:
+            raise RuntimeError("first go fails")
+        ran_twice.set()
+
+    with anyio.fail_after(30):
+        async with anyio.create_task_group() as tg:
+            tg.start_soon(
+                partial(
+                    run,
+                    transport,
+                    {"reindex": handler},
+                    retrying(),
+                    scheduler=scheduler,
+                    shutdown=stop,
+                )
+            )
+            await ran_twice.wait()
+            stop.set()
+
+    assert attempts == [0, 1]
+    assert await scheduler.pending() == 0
+    assert await transport.control.xlen(transport.streams[0]) == 0
+    assert await transport.control.xlen(transport.dlq) == 0
+
+
+async def test_a_task_out_of_attempts_lands_in_the_dlq_intact(
+    transport: RedisStreamsTransport, scheduler: RedisScheduler
+) -> None:
+    """Everything needed to replay it survives: payload, reason, traceback."""
+    payload = b'{"doc_id":42,"binary":"\x00"}'
+    await transport.enqueue(envelope(payload), queue=transport.queue)
+    stop = anyio.Event()
+
+    async def handler(envelope_: Envelope) -> None:
+        raise RuntimeError("always fails")
+
+    with anyio.fail_after(30):
+        async with anyio.create_task_group() as tg:
+            tg.start_soon(
+                partial(
+                    run,
+                    transport,
+                    {"reindex": handler},
+                    retrying(max_attempts=2),
+                    scheduler=scheduler,
+                    shutdown=stop,
+                )
+            )
+            # Blocking read rather than polling: it returns the moment it lands.
+            reply: Any = await scheduler.control.xread(
+                {transport.dlq: b"0"}, count=1, block=15_000
+            )
+            stop.set()
+
+    assert reply
+    [(_, entries)] = reply
+    [(_, fields)] = entries
+    assert fields[b"dlq_reason"] == b"max_attempts"
+    assert fields[b"payload"] == payload
+    assert b"RuntimeError: always fails" in fields[b"dlq_detail"]
+    assert fields[b"dlq_source"] == transport.streams[0].encode()
+    # Earlier attempts survive as history; the final one is the traceback above.
+    assert fields[b"history"] == b"0: RuntimeError: always fails"
+    assert fields[b"attempt"] == b"1"
+
+    assert await transport.control.xlen(transport.streams[0]) == 0
+    assert await scheduler.pending() == 0

@@ -11,8 +11,9 @@ import anyio
 import pytest
 
 from litestar_rs.core.cron import CronJob
-from litestar_rs.core.envelope import Envelope, Record, to_fields
+from litestar_rs.core.envelope import Envelope, Pending, Record, to_fields
 from litestar_rs.core.errors import ConfigurationError
+from litestar_rs.core.retry import RetryPolicy
 from litestar_rs.core.worker import (
     Slots,
     WorkerConfig,
@@ -54,11 +55,60 @@ def record(entry_id: bytes, task: str = "reindex") -> Record:
     )
 
 
+def pending(entry_id: bytes, times_delivered: int = 1) -> Pending:
+    return Pending(
+        stream="{lrs}:q:default:0",
+        entry_id=entry_id,
+        times_delivered=times_delivered,
+    )
+
+
+class FakeScheduler:
+    def __init__(self, *, lead: bool = True, now: int = 1_712_345_678_901) -> None:
+        self.lead = lead
+        self.now = now
+        self.promotions = 0
+        self.cron_passes = 0
+        self.released: list[str] = []
+        self.tokens: list[str] = []
+        self.scheduled: list[tuple[Envelope, int, str | None]] = []
+
+    async def hold_leadership(self, token: str, *, ttl_ms: int) -> bool:
+        self.tokens.append(token)
+        return self.lead
+
+    async def release_leadership(self, token: str) -> bool:
+        self.released.append(token)
+        return True
+
+    async def schedule_cron(self, jobs: Sequence[CronJob]) -> list[str]:
+        self.cron_passes += 1
+        return []
+
+    async def promote(self, *, limit: int = 100) -> list[bytes]:
+        self.promotions += 1
+        return []
+
+    async def now_ms(self) -> int:
+        return self.now
+
+    async def schedule_at(
+        self,
+        envelope: Envelope,
+        *,
+        queue: str,
+        when_ms: int,
+        scheduled_id: str | None = None,
+    ) -> str:
+        self.scheduled.append((envelope, when_ms, scheduled_id))
+        return scheduled_id or envelope.id
+
+
 class FakeTransport:
     def __init__(
         self,
         batches: list[list[Record]] | None = None,
-        pending: list[tuple[str, bytes]] | None = None,
+        pending: list[Pending] | None = None,
         claimable: set[bytes] | None = None,
     ) -> None:
         self.batches = list(batches or [])
@@ -71,6 +121,8 @@ class FakeTransport:
         self.cleared: list[list[bytes]] = []
         self.acked: list[tuple[str, list[bytes]]] = []
         self.trimmed = 0
+        self.queue = "default"
+        self.buried: list[tuple[bytes, str, str]] = []
         self.events: list[str] = []
 
     async def ensure_group(self) -> None:
@@ -98,9 +150,15 @@ class FakeTransport:
         self.acked.append((stream, list(entry_ids)))
         return len(entry_ids)
 
-    async def pending(self, *, count: int, min_idle_ms: int) -> list[tuple[str, bytes]]:
+    async def pending(self, *, count: int, min_idle_ms: int) -> list[Pending]:
         self.pending_counts.append(count)
         return self.pending_entries if count > 0 else []
+
+    async def dead_letter(
+        self, record: Record, *, reason: str, detail: str, times_delivered: int
+    ) -> bytes:
+        self.buried.append((record.entry_id, reason, detail))
+        return b"dlq-1"
 
     async def reclaim(
         self, stream: str, entry_id: bytes, *, min_idle_ms: int, ttl_ms: int
@@ -215,39 +273,109 @@ async def test_successful_handler_acks_and_frees_the_slot() -> None:
     async def handler(envelope: Envelope) -> None:
         seen.append(envelope.task)
 
-    await _run_one(transport, {"reindex": handler}, slots, record(b"1-0"))
+    await _run_one(
+        transport,
+        FakeScheduler(),
+        {"reindex": handler},
+        slots,
+        WorkerConfig(),
+        record(b"1-0"),
+    )
 
     assert seen == ["reindex"]
     assert transport.acked == [("{lrs}:q:default:0", [b"1-0"])]
     assert slots.ids == set()
 
 
-async def test_failing_handler_does_not_ack() -> None:
+async def test_a_failing_task_is_rescheduled_with_backoff() -> None:
+    """The entry is released only after the retry is safely on the clock."""
     transport = FakeTransport()
+    scheduler = FakeScheduler()
     slots = Slots()
     slots.take([b"1-0"])
 
     async def handler(envelope: Envelope) -> None:
         raise RuntimeError("boom")
 
-    await _run_one(transport, {"reindex": handler}, slots, record(b"1-0"))
+    await _run_one(
+        transport,
+        scheduler,
+        {"reindex": handler},
+        slots,
+        WorkerConfig(),
+        record(b"1-0"),
+    )
 
-    assert transport.acked == []
-    assert transport.cleared == []
+    [(envelope, when_ms, scheduled_id)] = scheduler.scheduled
+    assert envelope.attempt == 1
+    assert when_ms > scheduler.now
+    assert scheduled_id == "retry:1-0:1"
+    assert transport.acked == [("{lrs}:q:default:0", [b"1-0"])]
+    assert transport.buried == []
     assert slots.ids == set()
 
 
-async def test_unknown_task_is_handed_back_not_acked() -> None:
-    """Mid-rollout the other version knows this task; do not ack and do not DLQ."""
+async def test_a_task_out_of_attempts_is_buried() -> None:
     transport = FakeTransport()
+    scheduler = FakeScheduler()
+    slots = Slots()
+    slots.take([b"1-0"])
+    spent = record(b"1-0")
+    spent.fields[b"attempt"] = b"2"
+
+    async def handler(envelope: Envelope) -> None:
+        raise RuntimeError("boom")
+
+    cfg = WorkerConfig(retry=RetryPolicy(max_attempts=3))
+    await _run_one(transport, scheduler, {"reindex": handler}, slots, cfg, spent)
+
+    [(entry_id, reason, detail)] = transport.buried
+    assert entry_id == b"1-0"
+    assert reason == "max_attempts"
+    assert "RuntimeError: boom" in detail
+    assert scheduler.scheduled == []
+    assert transport.acked == [("{lrs}:q:default:0", [b"1-0"])]
+
+
+async def test_unknown_task_is_deferred_rather_than_acked_away() -> None:
+    """Mid-rollout the other version knows this task; hand it back on a delay."""
+    transport = FakeTransport()
+    scheduler = FakeScheduler()
     slots = Slots()
     slots.take([b"1-0"])
 
-    await _run_one(transport, {}, slots, record(b"1-0", task="from_the_future"))
+    await _run_one(
+        transport,
+        scheduler,
+        {},
+        slots,
+        WorkerConfig(),
+        record(b"1-0", task="from_the_future"),
+    )
 
-    assert transport.acked == []
-    assert transport.cleared == [[b"1-0"]]
-    assert slots.unhandled == {b"1-0"}
+    [(envelope, when_ms, _)] = scheduler.scheduled
+    assert envelope.attempt == 0, "a rollout is not an application failure"
+    assert when_ms > scheduler.now
+    assert transport.buried == []
+    assert b"1-0" in slots.unhandled
+
+
+async def test_a_task_unknown_for_too_long_is_buried() -> None:
+    """The threshold is time: counting tries would bury work mid-deploy."""
+    transport = FakeTransport()
+    scheduler = FakeScheduler()
+    slots = Slots()
+    slots.take([b"1-0"])
+    stale = record(b"1-0", task="from_the_future")
+    stale.fields[b"enqueued_at"] = str(scheduler.now - 86_400_000).encode()
+
+    cfg = WorkerConfig(retry=RetryPolicy(unknown_task_timeout_ms=3_600_000))
+    await _run_one(transport, scheduler, {}, slots, cfg, stale)
+
+    [(_, reason, detail)] = transport.buried
+    assert reason == "unknown_task"
+    assert detail == "from_the_future"
+    assert scheduler.scheduled == []
 
 
 async def test_heartbeat_refreshes_exactly_what_is_in_flight() -> None:
@@ -277,7 +405,13 @@ async def test_a_handler_that_never_returns_keeps_being_refreshed() -> None:
         async with anyio.create_task_group() as tg:
             slots.take([b"1-0"])
             tg.start_soon(
-                _run_one, transport, {"reindex": never_returns}, slots, record(b"1-0")
+                _run_one,
+                transport,
+                FakeScheduler(),
+                {"reindex": never_returns},
+                slots,
+                config,
+                record(b"1-0"),
             )
 
             async def heartbeat() -> None:
@@ -293,7 +427,7 @@ async def test_a_handler_that_never_returns_keeps_being_refreshed() -> None:
 
 async def test_reclaim_respects_credits_and_skips_what_it_cannot_run() -> None:
     transport = FakeTransport(
-        pending=[("{lrs}:q:default:0", b"7-0"), ("{lrs}:q:default:0", b"8-0")],
+        pending=[pending(b"7-0"), pending(b"8-0")],
         claimable={b"7-0", b"8-0"},
     )
     slots = Slots()
@@ -329,6 +463,7 @@ async def test_run_drains_in_flight_work_on_shutdown() -> None:
         transport,
         {"reindex": handler},
         WorkerConfig(concurrency=2, reclaim_interval_s=60.0, trim_interval_s=60.0),
+        scheduler=FakeScheduler(),
         sleep=anyio.sleep,
         shutdown=stop,
     )
@@ -360,43 +495,44 @@ async def test_shutdown_wakes_a_fully_loaded_consume_loop() -> None:
     assert slots.ids == {b"busy"}
 
 
-async def test_undecodable_entry_is_handed_back() -> None:
-    """Nothing this worker can do with it; a peer or the DLQ milestone decides."""
+async def test_an_undecodable_entry_is_buried_immediately() -> None:
+    """No deployment will ever decode it, so retrying is pure noise."""
     transport = FakeTransport()
     slots = Slots()
     slots.take([b"1-0"])
     broken = Record(stream="s", entry_id=b"1-0", fields={b"v": b"1"})
 
-    await _run_one(transport, {}, slots, broken)
+    await _run_one(transport, FakeScheduler(), {}, slots, WorkerConfig(), broken)
 
-    assert transport.acked == []
-    assert transport.cleared == [[b"1-0"]]
-    assert slots.unhandled == {b"1-0"}
+    [(entry_id, reason, _)] = transport.buried
+    assert entry_id == b"1-0"
+    assert reason == "malformed"
+    assert transport.acked == [("s", [b"1-0"])]
 
 
-class FakeScheduler:
-    def __init__(self, *, lead: bool = True) -> None:
-        self.lead = lead
-        self.promotions = 0
-        self.cron_passes = 0
-        self.released: list[str] = []
-        self.tokens: list[str] = []
+async def test_an_entry_delivered_too_often_is_buried_not_run() -> None:
+    """Taken from this many dead owners means it kills whatever picks it up."""
+    transport = FakeTransport(
+        pending=[pending(b"7-0", times_delivered=9)], claimable={b"7-0"}
+    )
+    slots = Slots()
+    spawned: list[bytes] = []
+    sleep = stop_after(1)
 
-    async def hold_leadership(self, token: str, *, ttl_ms: int) -> bool:
-        self.tokens.append(token)
-        return self.lead
+    cfg = WorkerConfig(retry=RetryPolicy(max_deliveries=5))
+    with pytest.raises(_StopLoop):
+        await _reclaim_loop(
+            transport,
+            slots,
+            cfg,
+            sleep,  # type: ignore[arg-type]
+            lambda rec: spawned.append(rec.entry_id),
+        )
 
-    async def release_leadership(self, token: str) -> bool:
-        self.released.append(token)
-        return True
-
-    async def schedule_cron(self, jobs: Sequence[CronJob]) -> list[str]:
-        self.cron_passes += 1
-        return []
-
-    async def promote(self, *, limit: int = 100) -> list[bytes]:
-        self.promotions += 1
-        return []
+    assert spawned == []
+    [(entry_id, reason, _)] = transport.buried
+    assert entry_id == b"7-0"
+    assert reason == "max_deliveries"
 
 
 def test_leader_lease_must_outlast_the_scheduler_interval() -> None:
@@ -440,9 +576,7 @@ async def test_leadership_is_released_when_the_loop_ends() -> None:
 
 async def test_reclaim_never_takes_back_our_own_in_flight_entry() -> None:
     """The alive key is set one await after the read; that window must be shut."""
-    transport = FakeTransport(
-        pending=[("{lrs}:q:default:0", b"7-0")], claimable={b"7-0"}
-    )
+    transport = FakeTransport(pending=[pending(b"7-0")], claimable={b"7-0"})
     slots = Slots()
     slots.take([b"7-0"])
     spawned: list[bytes] = []

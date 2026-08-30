@@ -118,7 +118,7 @@ layers = [
     "transport : scheduler",
     "scripts",
     "protocols",
-    "cron",
+    "cron : retry",
     "envelope : keys",
     "errors",
 ]

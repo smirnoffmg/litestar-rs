@@ -6,10 +6,11 @@ from typing import Any
 from redis.asyncio import Redis
 from redis.exceptions import ResponseError
 
-from litestar_rs.core.envelope import Envelope, Record, to_fields
+from litestar_rs.core.envelope import Envelope, Pending, Record, to_fields
 from litestar_rs.core.errors import ConfigurationError, PayloadTooLarge
 from litestar_rs.core.keys import (
     alive_key,
+    dlq_key,
     stream_for,
     stream_keys,
     validate_namespace,
@@ -25,6 +26,9 @@ DEFAULT_NAMESPACE = "lrs"
 DEFAULT_QUEUE = "default"
 DEFAULT_GROUP = "workers"
 DEFAULT_MAX_PAYLOAD_BYTES = 128 * 1024
+
+# A traceback is for a human reading the DLQ, not a document store.
+MAX_DETAIL_BYTES = 8 * 1024
 
 
 def _connection_kwarg(client: Redis, name: str) -> Any:
@@ -93,6 +97,7 @@ class RedisStreamsTransport:
         self.block_ms = block_ms
         self.max_payload_bytes = max_payload_bytes
         self.streams = stream_keys(self.namespace, self.queue, shards)
+        self.dlq = dlq_key(self.namespace)
         self._scripts: TransportScripts = register_transport(control)
 
     def alive_key(self, entry_id: bytes) -> str:
@@ -167,10 +172,10 @@ class RedisStreamsTransport:
         acked = await self._scripts.ack(keys=keys, args=[self.group, *entry_ids])
         return int(acked)
 
-    async def pending(self, *, count: int, min_idle_ms: int) -> list[tuple[str, bytes]]:
+    async def pending(self, *, count: int, min_idle_ms: int) -> list[Pending]:
         if count <= 0:
             return []
-        found: list[tuple[str, bytes]] = []
+        found: list[Pending] = []
         for stream in self.streams:
             entries = await self.control.xpending_range(
                 stream,
@@ -180,10 +185,34 @@ class RedisStreamsTransport:
                 count=count - len(found),
                 idle=min_idle_ms,
             )
-            found.extend((stream, _as_bytes(e["message_id"])) for e in entries)
+            found.extend(
+                Pending(
+                    stream=stream,
+                    entry_id=_as_bytes(entry["message_id"]),
+                    times_delivered=int(entry["times_delivered"]),
+                )
+                for entry in entries
+            )
             if len(found) >= count:
                 break
         return found
+
+    async def dead_letter(
+        self, record: Record, *, reason: str, detail: str, times_delivered: int
+    ) -> bytes:
+        """Park an entry that will never succeed, keeping everything about it.
+
+        The original payload rides along untouched, so a fixed deployment can
+        replay it without reconstructing anything.
+        """
+        seconds, microseconds = await self.control.time()
+        fields: dict[Any, Any] = dict(record.fields)
+        fields[b"dlq_reason"] = reason.encode()
+        fields[b"dlq_detail"] = detail.encode()[:MAX_DETAIL_BYTES]
+        fields[b"dlq_source"] = record.stream.encode()
+        fields[b"dlq_deliveries"] = str(times_delivered).encode()
+        fields[b"dlq_at"] = str(seconds * 1000 + microseconds // 1000).encode()
+        return _as_bytes(await self.control.xadd(self.dlq, fields))
 
     async def reclaim(
         self, stream: str, entry_id: bytes, *, min_idle_ms: int, ttl_ms: int

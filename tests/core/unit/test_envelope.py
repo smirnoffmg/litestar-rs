@@ -83,3 +83,9 @@ def test_unknown_fields_are_tolerated() -> None:
 def test_json_codec_round_trip() -> None:
     codec = JsonCodec()
     assert codec.decode(codec.encode({"doc_id": 1})) == {"doc_id": 1}
+
+
+def test_history_round_trips_and_is_omitted_when_empty() -> None:
+    assert b"history" not in to_fields(make())
+    with_history = make(history=("0: RuntimeError: boom", "1: ValueError: nope"))
+    assert from_fields(to_fields(with_history)).history == with_history.history
