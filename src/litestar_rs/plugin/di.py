@@ -44,7 +44,9 @@ def _underlying(provide: Provide) -> Callable[..., Any]:
 
 
 def _parameters(provide: Provide) -> list[inspect.Parameter]:
-    return list(inspect.signature(_underlying(provide)).parameters.values())
+    # eval_str resolves annotations in modules using postponed evaluation.
+    signature = inspect.signature(_underlying(provide), eval_str=True)
+    return list(signature.parameters.values())
 
 
 def plan_dependencies(
