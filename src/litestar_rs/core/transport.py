@@ -23,7 +23,7 @@ from litestar_rs.core.scripts import (
 )
 
 DEFAULT_NAMESPACE = "lrs"
-DEFAULT_QUEUE = "default"
+DEFAULT_QUEUES = ("default",)
 DEFAULT_GROUP = "workers"
 DEFAULT_MAX_PAYLOAD_BYTES = 128 * 1024
 
@@ -50,8 +50,9 @@ class RedisStreamsTransport:
         control: Redis,
         consumer: str,
         namespace: str = DEFAULT_NAMESPACE,
-        queue: str = DEFAULT_QUEUE,
+        queues: Sequence[str] = DEFAULT_QUEUES,
         shards: int = 1,
+        fairness_every: int = 10,
         group: str = DEFAULT_GROUP,
         block_ms: int = 5_000,
         max_payload_bytes: int = DEFAULT_MAX_PAYLOAD_BYTES,
@@ -75,6 +76,14 @@ class RedisStreamsTransport:
             )
         if block_ms < 0:
             raise ConfigurationError(f"block_ms must not be negative, got {block_ms}")
+        if not queues:
+            raise ConfigurationError("queues must name at least one queue")
+        if len(set(queues)) != len(queues):
+            raise ConfigurationError(f"queues must not repeat, got {list(queues)}")
+        if fairness_every < 0:
+            raise ConfigurationError(
+                f"fairness_every must not be negative, got {fairness_every}"
+            )
 
         socket_timeout = _connection_kwarg(reader, "socket_timeout")
         if socket_timeout is None:
@@ -92,12 +101,25 @@ class RedisStreamsTransport:
         self.control = control
         self.consumer = consumer
         self.namespace = validate_namespace(namespace)
-        self.queue = validate_queue(queue)
+        self.queues = tuple(validate_queue(queue) for queue in queues)
         self.group = group
         self.block_ms = block_ms
+        self.shards = shards
+        self.fairness_every = fairness_every
         self.max_payload_bytes = max_payload_bytes
-        self.streams = stream_keys(self.namespace, self.queue, shards)
+        self.streams_by_queue = {
+            queue: stream_keys(self.namespace, queue, shards) for queue in self.queues
+        }
+        self.streams = [
+            stream for queue in self.queues for stream in self.streams_by_queue[queue]
+        ]
+        self._queue_of = {
+            stream: queue
+            for queue, streams in self.streams_by_queue.items()
+            for stream in streams
+        }
         self.dlq = dlq_key(self.namespace)
+        self._passes = 0
         self._scripts: TransportScripts = register_transport(control)
 
     def alive_key(self, entry_id: bytes) -> str:
@@ -121,23 +143,53 @@ class RedisStreamsTransport:
                 "store it out of band and enqueue a payload_ref instead"
             )
         stream = stream_for(
-            self.namespace, validate_queue(queue), len(self.streams), envelope.id
+            self.namespace, validate_queue(queue), self.shards, envelope.id
         )
         fields: dict[Any, Any] = dict(to_fields(envelope))
         entry_id = await self.control.xadd(stream, fields)
         return _as_bytes(entry_id)
+
+    def queue_of(self, stream: str) -> str:
+        return self._queue_of[stream]
+
+    def _priority_order(self) -> list[str]:
+        """Which queue to try first this pass.
+
+        Strict priority would starve the low queue outright, so every
+        ``fairness_every`` passes the order is inverted and the low queue gets
+        first refusal. That bounds how long anything can wait behind a busy
+        high-priority queue.
+        """
+        self._passes += 1
+        if self.fairness_every and self._passes % self.fairness_every == 0:
+            return list(reversed(self.queues))
+        return list(self.queues)
 
     async def read(self, count: int) -> list[Record]:
         if count <= 0:
             # XREADGROUP COUNT 0 is not the same thing as not reading: a fixed
             # COUNT is what skews work between workers (taskiq-redis#91).
             return []
+        if len(self.queues) > 1:
+            # XREADGROUP with BLOCK wakes on whichever stream has something, so
+            # it cannot express priority. A non-blocking sweep from high to low
+            # can, and only when everything is empty do we block on all of them.
+            for queue in self._priority_order():
+                records = await self._read(self.streams_by_queue[queue], count, None)
+                if records:
+                    return records
+        return await self._read(self.streams, count, self.block_ms)
+
+    async def _read(
+        self, streams: Sequence[str], count: int, block_ms: int | None
+    ) -> list[Record]:
         reply = await self.reader.xreadgroup(
             groupname=self.group,
             consumername=self.consumer,
-            streams=dict.fromkeys(self.streams, ">"),
+            streams=dict.fromkeys(streams, ">"),
             count=count,
-            block=self.block_ms,
+            # block=0 would wait forever; a non-blocking read wants no BLOCK at all.
+            block=block_ms,
         )
         return _records_from_read(reply)
 

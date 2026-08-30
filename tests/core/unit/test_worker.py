@@ -121,9 +121,11 @@ class FakeTransport:
         self.cleared: list[list[bytes]] = []
         self.acked: list[tuple[str, list[bytes]]] = []
         self.trimmed = 0
-        self.queue = "default"
         self.buried: list[tuple[bytes, str, str]] = []
         self.events: list[str] = []
+
+    def queue_of(self, stream: str) -> str:
+        return "default"
 
     async def ensure_group(self) -> None:
         self.events.append("ensure_group")

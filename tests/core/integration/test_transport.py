@@ -39,7 +39,7 @@ async def test_ensure_group_is_idempotent(transport: RedisStreamsTransport) -> N
 
 async def test_entry_survives_the_round_trip(transport: RedisStreamsTransport) -> None:
     original = envelope(traceparent="00-abcdef-012345-01")
-    await transport.enqueue(original, queue=transport.queue)
+    await transport.enqueue(original, queue=transport.queues[0])
 
     [record] = await transport.read(10)
 
@@ -50,7 +50,7 @@ async def test_entry_survives_the_round_trip(transport: RedisStreamsTransport) -
 async def test_ack_clears_the_pel_and_the_stream(
     transport: RedisStreamsTransport,
 ) -> None:
-    await transport.enqueue(envelope(), queue=transport.queue)
+    await transport.enqueue(envelope(), queue=transport.queues[0])
     [record] = await transport.read(10)
     await transport.mark_alive([record.entry_id], ttl_ms=TTL_MS)
 
@@ -63,7 +63,7 @@ async def test_ack_clears_the_pel_and_the_stream(
 
 
 async def test_second_ack_is_a_no_op(transport: RedisStreamsTransport) -> None:
-    await transport.enqueue(envelope(), queue=transport.queue)
+    await transport.enqueue(envelope(), queue=transport.queues[0])
     [record] = await transport.read(10)
     await transport.ack(record.stream, [record.entry_id])
 
@@ -74,7 +74,7 @@ async def test_live_owner_is_not_reclaimed(
     transport: RedisStreamsTransport, transports: Make
 ) -> None:
     """A long task is not reclaimed while its worker keeps saying it is alive."""
-    await transport.enqueue(envelope(), queue=transport.queue)
+    await transport.enqueue(envelope(), queue=transport.queues[0])
     [record] = await transport.read(10)
     await transport.mark_alive([record.entry_id], ttl_ms=TTL_MS)
 
@@ -92,7 +92,7 @@ async def test_live_owner_is_not_reclaimed(
 async def test_dead_owner_is_reclaimed(
     transport: RedisStreamsTransport, transports: Make
 ) -> None:
-    await transport.enqueue(envelope(), queue=transport.queue)
+    await transport.enqueue(envelope(), queue=transport.queues[0])
     [record] = await transport.read(10)
     await transport.mark_alive([record.entry_id], ttl_ms=TTL_MS)
     await transport.clear_alive([record.entry_id])
@@ -117,7 +117,7 @@ async def test_only_one_of_many_reclaimers_wins(
     transport: RedisStreamsTransport, transports: Make
 ) -> None:
     """The atomicity requirement on the Lua script, under real concurrency."""
-    await transport.enqueue(envelope(), queue=transport.queue)
+    await transport.enqueue(envelope(), queue=transport.queues[0])
     [record] = await transport.read(10)
 
     peers = [await transports(f"peer-{n}") for n in range(8)]
@@ -139,7 +139,7 @@ async def test_only_one_of_many_reclaimers_wins(
 async def test_reclaiming_a_vanished_entry_cleans_the_pel(
     transport: RedisStreamsTransport, transports: Make
 ) -> None:
-    await transport.enqueue(envelope(), queue=transport.queue)
+    await transport.enqueue(envelope(), queue=transport.queues[0])
     [record] = await transport.read(10)
     await transport.control.xdel(record.stream, record.entry_id)
 
@@ -157,7 +157,7 @@ async def test_stream_does_not_grow_under_steady_ack(
 ) -> None:
     for round_number in range(50):
         await transport.enqueue(
-            envelope(id=f"job-{round_number}"), queue=transport.queue
+            envelope(id=f"job-{round_number}"), queue=transport.queues[0]
         )
         [record] = await transport.read(10)
         await transport.mark_alive([record.entry_id], ttl_ms=TTL_MS)
@@ -167,7 +167,7 @@ async def test_stream_does_not_grow_under_steady_ack(
 
 async def test_trim_keeps_unacked_entries(transport: RedisStreamsTransport) -> None:
     """MINID would drop pending work older than the window; the floor prevents it."""
-    await transport.enqueue(envelope(id="pending-one"), queue=transport.queue)
+    await transport.enqueue(envelope(id="pending-one"), queue=transport.queues[0])
     [record] = await transport.read(10)
 
     await transport.trim(retention_ms=0)
@@ -176,10 +176,10 @@ async def test_trim_keeps_unacked_entries(transport: RedisStreamsTransport) -> N
 
 
 async def test_trim_drops_acked_entries(transport: RedisStreamsTransport) -> None:
-    await transport.enqueue(envelope(), queue=transport.queue)
+    await transport.enqueue(envelope(), queue=transport.queues[0])
     [record] = await transport.read(10)
     await transport.ack(record.stream, [record.entry_id])
-    await transport.enqueue(envelope(id="kept"), queue=transport.queue)
+    await transport.enqueue(envelope(id="kept"), queue=transport.queues[0])
 
     await transport.trim(retention_ms=24 * 3600 * 1000)
 
@@ -188,7 +188,30 @@ async def test_trim_drops_acked_entries(transport: RedisStreamsTransport) -> Non
 
 async def test_lag_reports_depth(transport: RedisStreamsTransport) -> None:
     assert await transport.lag() == 0
-    await transport.enqueue(envelope(), queue=transport.queue)
+    await transport.enqueue(envelope(), queue=transport.queues[0])
     assert await transport.lag() == 1
     await transport.read(10)
     assert await transport.lag() == 0
+
+
+async def test_high_priority_is_served_first(
+    prioritised: RedisStreamsTransport,
+) -> None:
+    """The low entry was enqueued first and still waits."""
+    await prioritised.enqueue(envelope(id="slow"), queue="low")
+    await prioritised.enqueue(envelope(id="urgent"), queue="high")
+
+    [first] = await prioritised.read(1)
+
+    assert from_fields(first.fields).id == "urgent"
+    assert prioritised.queue_of(first.stream) == "high"
+
+
+async def test_the_low_queue_is_still_reached_when_high_is_empty(
+    prioritised: RedisStreamsTransport,
+) -> None:
+    await prioritised.enqueue(envelope(id="slow"), queue="low")
+
+    [record] = await prioritised.read(10)
+
+    assert prioritised.queue_of(record.stream) == "low"

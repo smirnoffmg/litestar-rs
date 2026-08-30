@@ -97,3 +97,27 @@ async def scheduler(
     schedulers: Callable[[], Awaitable[RedisScheduler]],
 ) -> RedisScheduler:
     return await schedulers()
+
+
+@pytest.fixture
+async def prioritised(
+    redis_url: str, namespace: str
+) -> AsyncIterator[RedisStreamsTransport]:
+    """A transport over two queues, high first."""
+    reader = Redis.from_url(redis_url, socket_timeout=30.0)
+    control = Redis.from_url(redis_url)
+    transport = RedisStreamsTransport(
+        reader=reader,
+        control=control,
+        consumer="worker-1",
+        namespace=namespace,
+        queues=("high", "low"),
+        block_ms=100,
+        fairness_every=0,
+    )
+    await transport.ensure_group()
+    try:
+        yield transport
+    finally:
+        await reader.aclose()
+        await control.aclose()

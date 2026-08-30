@@ -43,7 +43,7 @@ def config(**overrides: object) -> WorkerConfig:
 async def test_completed_work_is_acked_on_graceful_shutdown(
     transport: RedisStreamsTransport, scheduler: RedisScheduler
 ) -> None:
-    await transport.enqueue(envelope(), queue=transport.queue)
+    await transport.enqueue(envelope(), queue=transport.queues[0])
     stop = anyio.Event()
     ran = anyio.Event()
     done: list[str] = []
@@ -80,7 +80,7 @@ async def test_watchdog_hands_back_work_it_had_to_cut_off(
     up at once instead of waiting out the TTL. The 200ms here is the watchdog
     budget under test, not a wait for something to settle.
     """
-    await transport.enqueue(envelope(), queue=transport.queue)
+    await transport.enqueue(envelope(), queue=transport.queues[0])
     stop = anyio.Event()
     started = anyio.Event()
 
@@ -127,7 +127,7 @@ async def test_killed_worker_hands_its_entry_to_a_peer(
     """
     signal_key = f"{{{namespace}}}:signal"
     counter_key = f"{{{namespace}}}:runs"
-    await transport.enqueue(envelope(), queue=transport.queue)
+    await transport.enqueue(envelope(), queue=transport.queues[0])
 
     victim = await anyio.open_process(
         [
@@ -194,7 +194,7 @@ async def test_sigterm_stops_the_process_on_its_own(
 ) -> None:
     """The signal helper must actually wire SIGTERM to a graceful stop."""
     signal_key = f"{{{namespace}}}:signal"
-    await transport.enqueue(envelope(), queue=transport.queue)
+    await transport.enqueue(envelope(), queue=transport.queues[0])
 
     worker = await anyio.open_process(
         [sys.executable, str(WORKER_MAIN), redis_url, namespace, "w", signal_key, "ack"]
@@ -213,7 +213,7 @@ async def test_a_delayed_job_runs_end_to_end(
 ) -> None:
     """Schedule, promote, consume, ack -- with no separate scheduler process."""
     due = await scheduler.now_ms() - 1
-    await scheduler.schedule_at(envelope(), queue=transport.queue, when_ms=due)
+    await scheduler.schedule_at(envelope(), queue=transport.queues[0], when_ms=due)
 
     stop = anyio.Event()
     ran = anyio.Event()
@@ -255,7 +255,7 @@ def retrying(**overrides: int) -> WorkerConfig:
 async def test_a_failing_task_comes_back_with_its_attempt_counted(
     transport: RedisStreamsTransport, scheduler: RedisScheduler
 ) -> None:
-    await transport.enqueue(envelope(), queue=transport.queue)
+    await transport.enqueue(envelope(), queue=transport.queues[0])
     attempts: list[int] = []
     ran_twice = anyio.Event()
     stop = anyio.Event()
@@ -292,7 +292,7 @@ async def test_a_task_out_of_attempts_lands_in_the_dlq_intact(
 ) -> None:
     """Everything needed to replay it survives: payload, reason, traceback."""
     payload = b'{"doc_id":42,"binary":"\x00"}'
-    await transport.enqueue(envelope(payload), queue=transport.queue)
+    await transport.enqueue(envelope(payload), queue=transport.queues[0])
     stop = anyio.Event()
 
     async def handler(envelope_: Envelope) -> None:

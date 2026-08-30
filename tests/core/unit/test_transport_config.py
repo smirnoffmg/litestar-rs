@@ -36,7 +36,10 @@ def test_defaults_are_accepted() -> None:
     ("overrides", "expected"),
     [
         ({"namespace": "a:b"}, "namespace"),
-        ({"queue": "a{b"}, "queue"),
+        ({"queues": ["a{b"]}, "queue"),
+        ({"queues": []}, "queues"),
+        ({"queues": ["a", "a"]}, "queues"),
+        ({"fairness_every": -1}, "fairness_every"),
         ({"shards": 0}, "shards"),
         ({"consumer": ""}, "consumer"),
         ({"max_payload_bytes": 0}, "max_payload_bytes"),
@@ -98,3 +101,74 @@ async def test_payload_over_the_limit_is_refused(anyio_backend: object) -> None:
     )
     with pytest.raises(PayloadTooLarge, match="reindex"):
         await transport.enqueue(envelope, queue="default")
+
+
+def spy_reads(
+    transport: RedisStreamsTransport, monkeypatch: pytest.MonkeyPatch
+) -> list[tuple[list[str], int | None]]:
+    calls: list[tuple[list[str], int | None]] = []
+
+    async def spy(**kwargs: Any) -> None:
+        calls.append((list(kwargs["streams"]), kwargs["block"]))
+        return
+
+    monkeypatch.setattr(transport.reader, "xreadgroup", spy)
+    return calls
+
+
+async def test_a_single_queue_reads_once_and_blocks(
+    anyio_backend: object, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With nothing to prioritise, a sweep would just be an extra round trip."""
+    transport = build(block_ms=5000)
+    calls = spy_reads(transport, monkeypatch)
+
+    await transport.read(4)
+
+    assert calls == [(["{lrs}:q:default:0"], 5000)]
+
+
+async def test_priorities_sweep_high_to_low_before_blocking(
+    anyio_backend: object, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """BLOCK wakes on whichever stream has work, so priority needs a sweep first."""
+    transport = build(queues=["high", "low"], block_ms=5000, fairness_every=0)
+    calls = spy_reads(transport, monkeypatch)
+
+    await transport.read(4)
+
+    assert calls == [
+        (["{lrs}:q:high:0"], None),
+        (["{lrs}:q:low:0"], None),
+        (["{lrs}:q:high:0", "{lrs}:q:low:0"], 5000),
+    ]
+
+
+async def test_a_non_blocking_sweep_never_passes_block_zero(
+    anyio_backend: object, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """BLOCK 0 waits forever; a non-blocking read must omit BLOCK entirely."""
+    transport = build(queues=["high", "low"])
+    calls = spy_reads(transport, monkeypatch)
+
+    await transport.read(1)
+
+    assert [block for _, block in calls[:-1]] == [None, None]
+
+
+async def test_the_low_queue_gets_first_refusal_every_so_often(
+    anyio_backend: object, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Strict priority starves the low queue; the pass counter bounds the wait."""
+    transport = build(queues=["high", "low"], fairness_every=3)
+    calls = spy_reads(transport, monkeypatch)
+
+    for _ in range(3):
+        await transport.read(1)
+
+    first_tried = [streams[0] for streams, block in calls if block is None][::2]
+    assert first_tried == [
+        "{lrs}:q:high:0",
+        "{lrs}:q:high:0",
+        "{lrs}:q:low:0",
+    ]

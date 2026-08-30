@@ -304,7 +304,7 @@ async def _reschedule(
     when_ms = await scheduler.now_ms() + delay_ms
     await scheduler.schedule_at(
         envelope,
-        queue=transport.queue,
+        queue=transport.queue_of(record.stream),
         when_ms=when_ms,
         scheduled_id=scheduled_id,
     )
