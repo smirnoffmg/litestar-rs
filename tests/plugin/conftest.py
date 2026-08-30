@@ -1,11 +1,12 @@
 """Real Redis for the plugin's integration tests."""
 
+import os
 from collections.abc import Iterator
 
 import pytest
 from testcontainers.community.redis import RedisContainer
 
-REDIS_IMAGE = "redis:7-alpine"
+REDIS_IMAGE = os.environ.get("REDIS_IMAGE", "redis:7-alpine")
 
 
 @pytest.fixture(scope="session")

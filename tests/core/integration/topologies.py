@@ -11,6 +11,7 @@ out an address that only exists inside Docker.
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 from collections.abc import Iterator
@@ -27,6 +28,7 @@ MASTER_PORT = 7400
 REPLICA_PORT = 7401
 SENTINEL_PORT = 27400
 MASTER_NAME = "mymaster"
+IMAGE = os.environ.get("REDIS_IMAGE", "redis:7-alpine")
 DOCKER = shutil.which("docker") or "docker"
 
 SENTINEL_BOOT = (
@@ -55,7 +57,7 @@ class Topology:
 
 def cluster_container() -> Iterator[Topology]:
     container = (
-        DockerContainer("redis:7-alpine")
+        DockerContainer(IMAGE)
         .with_command(
             f"redis-server --port {CLUSTER_PORT} --cluster-enabled yes "
             "--cluster-announce-ip 127.0.0.1 --cluster-node-timeout 5000 "
@@ -126,7 +128,7 @@ def new_sentinel() -> Sentinel:
 
 def sentinel_container() -> Iterator[Topology]:
     container = (
-        DockerContainer("redis:7-alpine")
+        DockerContainer(IMAGE)
         .with_command(f'sh -c "{SENTINEL_BOOT}"')
         .with_bind_ports(MASTER_PORT, MASTER_PORT)
         .with_bind_ports(REPLICA_PORT, REPLICA_PORT)

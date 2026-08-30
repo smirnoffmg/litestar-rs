@@ -29,6 +29,13 @@ jobs:
 
   test:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The library claims Redis 7 and up; each claimed major gets a run.
+        redis: ["redis:7-alpine", "redis:8-alpine"]
+    env:
+      REDIS_IMAGE: ${{ matrix.redis }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

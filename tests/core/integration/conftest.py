@@ -1,5 +1,6 @@
 """Real Redis for the integration suite: one container per session."""
 
+import os
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from uuid import uuid4
 
@@ -10,8 +11,9 @@ from testcontainers.community.redis import RedisContainer
 from litestar_rs.core.scheduler import RedisScheduler
 from litestar_rs.core.transport import RedisStreamsTransport
 
-# Lowest version we support: XINFO GROUPS reports `lag` from Redis 7 on.
-REDIS_IMAGE = "redis:7-alpine"
+# Lowest version we support: XINFO GROUPS reports `lag` from Redis 7 on. CI runs
+# the suite against each supported major by setting REDIS_IMAGE.
+REDIS_IMAGE = os.environ.get("REDIS_IMAGE", "redis:7-alpine")
 
 
 @pytest.fixture(scope="session")
