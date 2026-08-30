@@ -18,5 +18,13 @@ def test_top_level_is_a_subset_of_the_core_surface() -> None:
     assert exported <= set(core.__all__)
 
 
-def test_version() -> None:
-    assert litestar_rs.__version__ == "0.1.0"
+def test_version_matches_the_one_place_it_is_declared() -> None:
+    """A version written twice is a version that will disagree with itself."""
+    import tomllib
+    from pathlib import Path
+
+    pyproject = Path(__file__).resolve().parents[3] / "pyproject.toml"
+    with pyproject.open("rb") as handle:
+        declared = tomllib.load(handle)["project"]["version"]
+
+    assert litestar_rs.__version__ == declared

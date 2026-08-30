@@ -3,6 +3,8 @@
 Delivery is at-least-once: handlers must be idempotent.
 """
 
+from importlib.metadata import version as _version
+
 from litestar_rs.core import (
     BrokerHandler,
     Codec,
@@ -42,7 +44,8 @@ from litestar_rs.core import (
     worker_running,
 )
 
-__version__ = "0.1.0"
+__version__ = _version("litestar-rs")
+"""Read from the installed metadata: pyproject is the only place it is written."""
 
 __all__ = [
     "BrokerHandler",
