@@ -62,6 +62,7 @@ class QueuePlugin(InitPlugin, CLIPlugin):
             enqueuer=self,
             type_encoders=app_config.type_encoders,
             type_decoders=app_config.type_decoders,
+            traceparent=self.config.traceparent,
         )
         app_config.lifespan.append(self._lifespan)
         app_config.route_handlers.append(self._health_route())

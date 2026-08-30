@@ -9,6 +9,7 @@ from litestar_rs.core.cron import CronJob
 from litestar_rs.core.errors import ConfigurationError
 from litestar_rs.core.worker import WorkerConfig
 from litestar_rs.plugin.registry import TaskRegistry
+from litestar_rs.plugin.tracing import TraceparentSource, no_traceparent
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,6 +32,8 @@ class QueueConfig:
     worker: WorkerConfig = field(default_factory=WorkerConfig)
     cron: Sequence[CronJob] = ()
     health_path: str = "/health/queue"
+    traceparent: TraceparentSource = no_traceparent
+    """Supplies the current W3C traceparent, so a task can join the request's trace."""
 
     def __post_init__(self) -> None:
         if not self.redis_url:

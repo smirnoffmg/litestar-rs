@@ -24,6 +24,11 @@ from litestar_rs.core.envelope import Envelope
 from litestar_rs.core.errors import ConfigurationError
 from litestar_rs.core.protocols import Enqueuer, TaskHandler
 from litestar_rs.plugin.di import DependencyPlan, plan_dependencies, resolved
+from litestar_rs.plugin.tracing import (
+    TraceparentSource,
+    current_traceparent,
+    no_traceparent,
+)
 
 DEFAULT_QUEUE = "default"
 
@@ -72,6 +77,7 @@ class TaskRegistry:
         self._declared: dict[str, Task[Any]] = {}
         self._bound: dict[str, BoundTask] = {}
         self._enqueuer: Enqueuer | None = None
+        self._traceparent: TraceparentSource = no_traceparent
         self._serializer: Callable[[Any], Any] | None = None
         self._decoders: TypeDecodersSequence | None = None
 
@@ -112,9 +118,11 @@ class TaskRegistry:
         enqueuer: Enqueuer,
         type_encoders: TypeEncodersMap | None = None,
         type_decoders: TypeDecodersSequence | None = None,
+        traceparent: TraceparentSource = no_traceparent,
     ) -> None:
         """Settle every task against the application. Failures land here, on boot."""
         self._enqueuer = enqueuer
+        self._traceparent = traceparent
         self._serializer = get_serializer(type_encoders)
         self._decoders = type_decoders
         self._bound = {
@@ -144,6 +152,9 @@ class TaskRegistry:
             task=name,
             payload=encode_json(arguments, self._serializer),
             enqueued_at=time.time_ns() // 1_000_000,
+            # Beside the payload, never inside it: restoring the span must not
+            # require decoding a payload the worker may not understand.
+            traceparent=self._traceparent(),
         )
         return await self._enqueuer.enqueue(envelope, queue=task.queue)
 
@@ -152,8 +163,12 @@ class TaskRegistry:
         task = self.bound(envelope.task)
         arguments = decode_json(envelope.payload, task.payload_type, self._decoders)
         payload = {field: getattr(arguments, field) for field in task.payload_fields}
-        async with resolved(task.plan) as injected:
-            await task.function(**payload, **injected)
+        token = current_traceparent.set(envelope.traceparent)
+        try:
+            async with resolved(task.plan) as injected:
+                await task.function(**payload, **injected)
+        finally:
+            current_traceparent.reset(token)
 
     def handlers(self) -> dict[str, TaskHandler]:
         """What the worker dispatches on: one entry per bound task."""
