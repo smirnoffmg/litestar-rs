@@ -1,7 +1,8 @@
 # PITFALLS.md
 
 Problems that have nothing to do with Redis, and therefore surface in
-production. A companion to `README.md`, which covers the transport layer.
+production. A companion to the [design document](https://smirnoffmg.dev/litestar-rs/design/),
+which covers the transport layer.
 
 Every item here is a design requirement, not a note for later. Decisions marked
 architectural cannot be retrofitted.
