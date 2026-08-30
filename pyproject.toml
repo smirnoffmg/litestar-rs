@@ -79,7 +79,7 @@ source_pkgs = ["litestar_rs.core"]
 branch = true
 
 [tool.coverage.report]
-fail_under = 0
+fail_under = 90
 show_missing = true
 exclude_also = [
     "if TYPE_CHECKING:",
@@ -107,3 +107,23 @@ name = "Core tests are framework-free"
 type = "forbidden"
 source_modules = ["tests.core"]
 forbidden_modules = ["litestar", "click"]
+
+# The spec's `independence` contract (transport / scheduler / result backend must
+# not import each other) names modules this milestone deliberately does not create,
+# and import-linter fails on a contract referencing an absent module. Its teeth for
+# now are the layering below: `protocols` can never acquire a dependency on a
+# concrete subsystem, which is what makes the future contract satisfiable.
+#
+# [[tool.importlinter.contracts]]
+# name = "Subsystems meet only through protocols"
+# type = "independence"
+# modules = [
+#     "litestar_rs.core.transport",
+#     "litestar_rs.core.scheduler",
+#     "litestar_rs.core.results",
+# ]
+[[tool.importlinter.contracts]]
+name = "Core internal layering"
+type = "layers"
+containers = ["litestar_rs.core"]
+layers = ["worker", "transport", "scripts", "protocols", "envelope : keys", "errors"]

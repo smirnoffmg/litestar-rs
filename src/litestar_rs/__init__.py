@@ -1,5 +1,43 @@
-"""Distributed task queue on Redis Streams with first-class Litestar integration."""
+"""Distributed task queue on Redis Streams with first-class Litestar integration.
+
+Delivery is at-least-once: handlers must be idempotent.
+"""
+
+from litestar_rs.core import (
+    Codec,
+    ConfigurationError,
+    Enqueuer,
+    Envelope,
+    JsonCodec,
+    LitestarRsError,
+    MalformedEnvelope,
+    PayloadTooLarge,
+    Record,
+    RedisStreamsTransport,
+    StreamTransport,
+    TaskHandler,
+    WorkerConfig,
+    run,
+    run_with_signals,
+)
 
 __version__ = "0.1.0"
 
-__all__ = ["__version__"]
+__all__ = [
+    "Codec",
+    "ConfigurationError",
+    "Enqueuer",
+    "Envelope",
+    "JsonCodec",
+    "LitestarRsError",
+    "MalformedEnvelope",
+    "PayloadTooLarge",
+    "Record",
+    "RedisStreamsTransport",
+    "StreamTransport",
+    "TaskHandler",
+    "WorkerConfig",
+    "__version__",
+    "run",
+    "run_with_signals",
+]
