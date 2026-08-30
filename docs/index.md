@@ -10,11 +10,14 @@ exactly-once is a design error in the application, not a bug here.
 ## Install
 
 ```bash
-uv add "litestar-rs[litestar]"
+uv add litestar-rs
 ```
 
-The `litestar` extra is only needed for the plugin. The core — transport,
-worker, scheduler — has no Litestar dependency and is usable on its own.
+The core — transport, worker, scheduler — never imports Litestar, and an
+import-linter contract keeps it that way, so `litestar_rs.core` is usable behind
+another framework or none. That is a rule about imports rather than about
+installation: Litestar is an ordinary dependency here, because a package called
+litestar-rs that made it optional would only be surprising.
 
 ## Quickstart
 

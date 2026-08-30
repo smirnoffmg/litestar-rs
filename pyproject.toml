@@ -27,6 +27,11 @@ dependencies = [
     "anyio>=4.2",
     "uvloop>=0.21",
     "cronsim>=2.7",
+    # A plain dependency, not an extra. "core works without Litestar" is a rule
+    # about imports -- checked by the import-linter contract below -- not about
+    # what gets installed, and nobody adds a package called litestar-rs in order
+    # to avoid Litestar.
+    "litestar>=2.0",
 ]
 
 [project.urls]
@@ -34,9 +39,6 @@ Homepage = "https://github.com/smirnoffmg/litestar-rs"
 Documentation = "https://smirnoffmg.github.io/litestar-rs"
 Source = "https://github.com/smirnoffmg/litestar-rs"
 Issues = "https://github.com/smirnoffmg/litestar-rs/issues"
-
-[project.optional-dependencies]
-litestar = ["litestar>=2.0"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/litestar_rs"]

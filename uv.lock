@@ -550,14 +550,10 @@ source = { editable = "." }
 dependencies = [
     { name = "anyio" },
     { name = "cronsim" },
+    { name = "litestar" },
     { name = "msgspec" },
     { name = "redis", extra = ["hiredis"] },
     { name = "uvloop" },
-]
-
-[package.optional-dependencies]
-litestar = [
-    { name = "litestar" },
 ]
 
 [package.dev-dependencies]
@@ -580,12 +576,11 @@ dev = [
 requires-dist = [
     { name = "anyio", specifier = ">=4.2" },
     { name = "cronsim", specifier = ">=2.7" },
-    { name = "litestar", marker = "extra == 'litestar'", specifier = ">=2.0" },
+    { name = "litestar", specifier = ">=2.0" },
     { name = "msgspec", specifier = ">=0.18" },
     { name = "redis", extras = ["hiredis"], specifier = ">=5.0" },
     { name = "uvloop", specifier = ">=0.21" },
 ]
-provides-extras = ["litestar"]
 
 [package.metadata.requires-dev]
 dev = [
