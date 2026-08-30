@@ -33,6 +33,12 @@ Encoding and decoding go through the application's own serializer, including its
 `type_encoders` and `type_decoders`, so a type your route handlers can return is
 a type your tasks can take.
 
+Never `pickle`. Payloads come back out of Redis, and unpickling one is remote
+code execution the moment Redis is compromised — an import-linter contract keeps
+`pickle` out of this package entirely. For the same reason a task name is looked
+up in the registry and never imported: an unregistered name is deferred and
+eventually buried, not resolved into something importable.
+
 Adding a parameter with a default is safe across a rolling deploy; removing one
 is not. Decoding ignores unknown fields on purpose, so a newer producer cannot
 break an older worker.

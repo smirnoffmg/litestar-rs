@@ -156,7 +156,7 @@ async def test_calling_a_task_directly_still_works() -> None:
 
 
 async def test_a_unit_of_work_can_hold_a_task_until_it_commits() -> None:
-    """pitfalls #1: publication has to be able to wait for the transaction."""
+    """Publication has to be able to wait for the transaction that justified it."""
     from litestar_rs.core.deferred import DeferredEnqueuer
 
     registry, enqueuer, _ = build()

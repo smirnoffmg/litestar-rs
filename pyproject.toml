@@ -121,6 +121,14 @@ type = "forbidden"
 source_modules = ["litestar_rs.core"]
 forbidden_modules = ["litestar", "click", "litestar_rs.plugin"]
 
+# Payloads come back out of Redis; unpickling one is remote code execution the
+# moment Redis is compromised.
+[[tool.importlinter.contracts]]
+name = "Payloads are never unpickled"
+type = "forbidden"
+source_modules = ["litestar_rs"]
+forbidden_modules = ["pickle", "shelve", "dill", "cloudpickle"]
+
 [[tool.importlinter.contracts]]
 name = "Plugin sits above core"
 type = "layers"

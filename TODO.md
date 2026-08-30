@@ -1,6 +1,6 @@
 # Work list
 
-Everything in `README.md` and `pitfalls.md` is implemented and covered by tests.
+Everything in the design document is implemented and covered by tests.
 This is what sits outside them.
 
 ## Release

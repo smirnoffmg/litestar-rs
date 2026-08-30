@@ -3,10 +3,6 @@
 The rules this library is built to, and why each one is a rule rather than a
 preference. Violating any invariant here is a bug, not a trade-off.
 
-Its companion is [PITFALLS.md](https://github.com/smirnoffmg/litestar-rs/blob/main/pitfalls.md),
-which covers the problems that have nothing to do with Redis and therefore
-surface in production.
-
 ## Delivery guarantee
 
 **Delivery is at-least-once.** A task can run more than once: a worker that
@@ -160,6 +156,21 @@ application's `PayloadStore` and the record carries a `payload_ref`. Without a
 store the transport's own limit refuses the record — nothing is dropped
 silently. Redis keeps the stream in memory; a payload measured in megabytes is a
 direct route to an OOM kill.
+
+## Payload safety
+
+**`pickle` is not introduced in any form.** Deserializing a payload taken out of
+Redis is remote code execution the moment Redis is compromised, and a queue is
+exactly the component an attacker reaches first. Payloads are msgspec against an
+explicit schema, and an import-linter contract forbids `pickle` anywhere in the
+package rather than trusting anyone to remember.
+
+**Task names resolve through the registry**, never by importing a string taken
+from the message. A name that is not registered is deferred and eventually
+buried; it is never a path to something importable.
+
+**Large arguments leave Redis** rather than being trusted to be small. See the
+execution contracts above.
 
 ## Not doing
 

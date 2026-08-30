@@ -93,9 +93,8 @@ Tasks, scheduling, retries, priorities, broker mode, results, testing and
 operations are covered in the
 **[full documentation](https://smirnoffmg.dev/litestar-rs/)**. The rules the
 library is built to are in
-**[Design and invariants](https://smirnoffmg.dev/litestar-rs/design/)**, with
-[PITFALLS.md](pitfalls.md) alongside. Runnable
-[examples](examples/) are included.
+**[Design and invariants](https://smirnoffmg.dev/litestar-rs/design/)**.
+Runnable [examples](examples/) are included.
 
 ## License
 
