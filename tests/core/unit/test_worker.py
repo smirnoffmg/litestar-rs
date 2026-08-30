@@ -127,12 +127,19 @@ class FakeTransport:
         self.buried: list[tuple[bytes, str, str]] = []
         self.dedup_claims: list[str] = []
         self.dedup_taken: set[str] = set()
+        self.reported_lag: int | None = 0
         self.events: list[str] = []
 
     consumer = "worker-1"
+    namespace = "lrs"
+    group = "workers"
+    queues: tuple[str, ...] = ("default",)
 
     def queue_of(self, stream: str) -> str:
         return "default"
+
+    async def lag(self) -> int | None:
+        return self.reported_lag
 
     async def ensure_group(self) -> None:
         self.events.append("ensure_group")

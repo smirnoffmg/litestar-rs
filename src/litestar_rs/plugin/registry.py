@@ -22,7 +22,7 @@ from litestar.types import TypeDecodersSequence, TypeEncodersMap
 
 from litestar_rs.core.envelope import Envelope
 from litestar_rs.core.errors import ConfigurationError
-from litestar_rs.core.protocols import Enqueuer
+from litestar_rs.core.protocols import Enqueuer, TaskHandler
 from litestar_rs.plugin.di import DependencyPlan, plan_dependencies, resolved
 
 DEFAULT_QUEUE = "default"
@@ -155,8 +155,9 @@ class TaskRegistry:
         async with resolved(task.plan) as injected:
             await task.function(**payload, **injected)
 
-    def handlers(self) -> dict[str, Callable[[Envelope], Awaitable[None]]]:
-        return {name: self.execute for name in self._bound}
+    def handlers(self) -> dict[str, TaskHandler]:
+        """What the worker dispatches on: one entry per bound task."""
+        return dict.fromkeys(self._bound, self.execute)
 
 
 def _bind(task: Task[Any], dependencies: Mapping[str, Provide]) -> BoundTask:

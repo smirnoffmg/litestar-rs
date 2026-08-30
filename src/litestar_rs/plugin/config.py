@@ -1,0 +1,41 @@
+"""Everything the plugin needs, in one place the application constructs itself."""
+
+from __future__ import annotations
+
+from collections.abc import Sequence
+from dataclasses import dataclass, field
+
+from litestar_rs.core.cron import CronJob
+from litestar_rs.core.errors import ConfigurationError
+from litestar_rs.core.worker import WorkerConfig
+from litestar_rs.plugin.registry import TaskRegistry
+
+
+@dataclass(frozen=True, slots=True)
+class QueueConfig:
+    """How this application talks to its queue.
+
+    There is deliberately no string path to the app object here. Requiring
+    ``"module:app"`` in a constructor pushes an import-time ordering problem onto
+    every user; the CLI already has the application it was invoked with.
+    """
+
+    registry: TaskRegistry
+    redis_url: str = "redis://localhost:6379/0"
+    namespace: str = "lrs"
+    queues: Sequence[str] = ("default",)
+    shards: int = 1
+    group: str = "workers"
+    consumer_prefix: str = "worker"
+    block_ms: int = 5_000
+    worker: WorkerConfig = field(default_factory=WorkerConfig)
+    cron: Sequence[CronJob] = ()
+    health_path: str = "/health/queue"
+
+    def __post_init__(self) -> None:
+        if not self.redis_url:
+            raise ConfigurationError("redis_url must not be empty")
+        if not self.health_path.startswith("/"):
+            raise ConfigurationError(
+                f"health_path must start with '/', got {self.health_path!r}"
+            )

@@ -77,7 +77,7 @@ markers = [
 ]
 
 [tool.coverage.run]
-source_pkgs = ["litestar_rs.core"]
+source_pkgs = ["litestar_rs.core", "litestar_rs.plugin"]
 branch = true
 
 [tool.coverage.report]

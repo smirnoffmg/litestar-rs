@@ -34,6 +34,9 @@ class StreamTransport(Protocol):
     """
 
     consumer: str
+    namespace: str
+    group: str
+    queues: tuple[str, ...]
 
     def queue_of(self, stream: str) -> str: ...
     async def ensure_group(self) -> None: ...
@@ -53,6 +56,7 @@ class StreamTransport(Protocol):
         self, stream: str, entry_id: bytes, *, min_idle_ms: int, ttl_ms: int
     ) -> list[Record]: ...
     async def trim(self, *, retention_ms: int) -> None: ...
+    async def lag(self) -> int | None: ...
 
 
 class Scheduler(Protocol):
