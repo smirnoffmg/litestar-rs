@@ -51,6 +51,7 @@ own record.
 The DLQ is a stream at `{ns}:dlq`:
 
 ```python
+namespace = "lrs"
 entries = await client.xrange(f"{{{namespace}}}:dlq", count=100)
 for entry_id, fields in entries:
     print(fields[b"dlq_reason"], fields[b"task"], fields[b"dlq_detail"])
@@ -60,9 +61,11 @@ The original payload is untouched, so replaying is re-enqueueing it. Reset
 `attempt` unless you want the replay to inherit the exhausted budget:
 
 ```python
-from litestar_rs import from_fields
 import msgspec.structs
 
+from litestar_rs import from_fields
+
+entry_id, fields = entries[0]
 envelope = from_fields(fields)
 await transport.enqueue(msgspec.structs.replace(envelope, attempt=0), queue="default")
 ```

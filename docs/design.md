@@ -104,7 +104,14 @@ teardown. A provider that genuinely needs a request or headers is an error at
 worker startup, not at runtime. The target shape of a task:
 
 ```python
-@app_tasks.task
+from uuid import UUID
+
+from litestar_rs.plugin import TaskRegistry
+
+tasks = TaskRegistry()
+
+
+@tasks.task
 async def reindex(doc_id: UUID, db: AsyncSession, cfg: Settings) -> None: ...
 ```
 

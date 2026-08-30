@@ -1,5 +1,15 @@
 # Priorities and fairness
 
+The snippets on this page assume:
+
+```python
+from uuid import UUID
+
+from litestar_rs.plugin import QueueConfig, TaskRegistry
+
+tasks = TaskRegistry()
+```
+
 ```python
 QueueConfig(registry=tasks, queues=("high", "default", "low"))
 ```
@@ -8,7 +18,7 @@ Queues are listed highest first. A task picks its queue at declaration:
 
 ```python
 @tasks.task(queue="high")
-async def urgent(...) -> None: ...
+async def urgent(order_id: UUID) -> None: ...
 ```
 
 ## Why a sweep

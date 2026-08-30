@@ -20,15 +20,35 @@ def test_a_health_path_without_a_leading_slash_is_refused() -> None:
         QueueConfig(registry=TaskRegistry(), health_path="queue")
 
 
-def test_health_is_unhealthy_when_redis_cannot_report_lag() -> None:
+def test_health_says_unhealthy_when_redis_cannot_report_lag() -> None:
     """A missing depth reading is not a zero-depth queue."""
-    reported = QueueHealth(namespace="lrs", group="workers", queues=(), lag=0, stats={})
+    reported = QueueHealth(
+        namespace="lrs", group="workers", queues=(), lag=0, stats={}, healthy=True
+    )
     unknown = QueueHealth(
-        namespace="lrs", group="workers", queues=(), lag=None, stats={}
+        namespace="lrs", group="workers", queues=(), lag=None, stats={}, healthy=False
     )
 
     assert reported.healthy is True
     assert unknown.healthy is False
+
+
+def test_healthy_reaches_the_wire() -> None:
+    """It used to be a property, which serialises to nothing at all."""
+    from litestar.serialization import encode_json
+
+    body = encode_json(
+        QueueHealth(
+            namespace="lrs",
+            group="workers",
+            queues=(),
+            lag=None,
+            stats={},
+            healthy=False,
+        )
+    )
+
+    assert b'"healthy":false' in body
 
 
 def test_the_health_route_can_be_turned_off() -> None:

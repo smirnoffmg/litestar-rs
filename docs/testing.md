@@ -8,6 +8,20 @@ the library rather than as an appendix.
 `CollectingEnqueuer` records what would have been enqueued and runs nothing —
 no worker, no Redis:
 
+The snippets on this page assume:
+
+```python
+from litestar_rs.plugin import TaskRegistry
+
+registry = TaskRegistry()
+dependencies: dict[str, object] = {}
+handlers: dict[str, object] = {}
+
+
+async def handle_request() -> None:
+    """Whatever your application does; it enqueues along the way."""
+```
+
 ```python
 from litestar_rs import CollectingEnqueuer
 

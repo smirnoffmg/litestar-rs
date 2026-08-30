@@ -21,19 +21,19 @@ class QueueHealth:
     """Depth from XINFO GROUPS. None when Redis cannot reconcile its counters."""
     stats: dict[str, int]
     """This process's own counters. All zero in a web process, which runs no tasks."""
-
-    @property
-    def healthy(self) -> bool:
-        return self.lag is not None
+    healthy: bool
+    """A real field, not a property: a probe reads the response, not the object."""
 
 
 async def queue_health(
     transport: StreamTransport, stats: WorkerStats | None = None
 ) -> QueueHealth:
+    lag = await transport.lag()
     return QueueHealth(
         namespace=transport.namespace,
         group=transport.group,
         queues=tuple(transport.queues),
-        lag=await transport.lag(),
+        lag=lag,
         stats=(stats or WorkerStats()).snapshot(),
+        healthy=lag is not None,
     )

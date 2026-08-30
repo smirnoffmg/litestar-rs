@@ -7,9 +7,10 @@ from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
-from litestar import Litestar, get
+from litestar import Litestar, Response, get
 from litestar.di import Provide
 from litestar.plugins import CLIPlugin, InitPlugin
+from litestar.status_codes import HTTP_200_OK, HTTP_503_SERVICE_UNAVAILABLE
 from redis.asyncio import Redis
 
 from litestar_rs.core.envelope import Envelope, TaskResult
@@ -166,8 +167,16 @@ class QueuePlugin(InitPlugin, CLIPlugin):
         plugin = self
 
         @get(self.config.health_path or "/health/queue")
-        async def health() -> QueueHealth:
-            return await queue_health(plugin.transport, plugin.stats)
+        async def health() -> Response[QueueHealth]:
+            report = await queue_health(plugin.transport, plugin.stats)
+            # A readiness probe reads the status code, not the body. Answering
+            # 200 while unhealthy is a probe that can never fail.
+            return Response(
+                report,
+                status_code=HTTP_200_OK
+                if report.healthy
+                else HTTP_503_SERVICE_UNAVAILABLE,
+            )
 
         return health
 

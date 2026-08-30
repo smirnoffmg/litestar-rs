@@ -34,7 +34,10 @@ than one handler shadowing the other — move it, or set `health_path=None` and
 serve the same data yourself:
 
 ```python
-from litestar_rs.plugin import queue_health
+from litestar import get
+
+from litestar_rs.plugin import QueuePlugin, queue_health
+
 
 @get("/healthz")
 async def healthz(plugin: QueuePlugin) -> dict[str, object]:

@@ -4,6 +4,18 @@ A task is an ordinary function. Its parameters are split in two when the
 application starts: anything the application provides as a dependency is
 injected in the worker, and everything else travels in the payload.
 
+The snippets on this page assume:
+
+```python
+from uuid import UUID
+
+from litestar.di import Provide
+
+from litestar_rs.plugin import QueueConfig, QueuePlugin, TaskRegistry
+
+tasks = TaskRegistry()
+```
+
 ```python
 @tasks.task
 async def reindex(doc_id: UUID, session: AsyncSession, settings: Settings) -> None:
@@ -77,7 +89,7 @@ def render(report_id: UUID) -> None:
 
 ```python
 @tasks.task(timeout_s=30)
-async def reindex(doc_id: UUID) -> None:
+async def rebuild(doc_id: UUID) -> None:
     ...
 ```
 
@@ -89,7 +101,7 @@ refused at startup rather than quietly ignoring it.
 
 ```python
 @tasks.task(queue="high")
-async def reindex(doc_id: UUID) -> None:
+async def urgent_reindex(doc_id: UUID) -> None:
     ...
 ```
 

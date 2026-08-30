@@ -281,3 +281,34 @@ def test_turning_the_health_route_off_registers_nothing(
     assert "/health/queue" in {route.path for route in app.routes}
     with pytest.raises(ConfigurationError, match="no health route"):
         plugin.health_app()
+
+
+async def test_the_probe_fails_when_the_queue_is_unhealthy(
+    redis_url: str, namespace: str
+) -> None:
+    """A readiness probe reads the status code; 200 while unhealthy never fails."""
+    app, plugin = make_app(redis_url, namespace)
+    stream = stream_key(namespace, "default", 0)
+
+    # A client of this test's own, because the app's belong to the test client's
+    # event loop and pools do not cross loops.
+    setup: Redis = Redis.from_url(redis_url)
+    try:
+        await setup.xgroup_create(stream, "workers", id="0", mkstream=True)
+        async with AsyncTestClient(app=app) as client:
+            healthy = await client.get(plugin.config.health_path or "")
+            assert healthy.status_code == 200
+            assert healthy.json()["healthy"] is True
+
+        # Redis gives up on lag once entries are deleted before being delivered.
+        entries = [await setup.xadd(stream, {b"v": b"1"}) for _ in range(3)]
+        await setup.xdel(stream, entries[1])
+
+        async with AsyncTestClient(app=app) as client:
+            unhealthy = await client.get(plugin.config.health_path or "")
+    finally:
+        await setup.aclose()
+
+    assert unhealthy.status_code == 503
+    assert unhealthy.json()["lag"] is None
+    assert unhealthy.json()["healthy"] is False

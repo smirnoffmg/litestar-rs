@@ -5,6 +5,28 @@
 Most work is enqueued and forgotten. Keeping an outcome for every job would be a
 key and a TTL spent on nobody, so a result is opt-in per job:
 
+The snippets on this page assume:
+
+```python
+from uuid import UUID
+
+from litestar_rs.core.testing import CollectingEnqueuer
+from litestar_rs.plugin import TaskRegistry
+
+registry = TaskRegistry()
+
+
+@registry.task
+async def reindex(doc_id: UUID) -> None: ...
+
+
+@registry.task
+async def charge(invoice_id: UUID) -> None: ...
+
+
+registry.bind({}, enqueuer=CollectingEnqueuer())
+```
+
 ```python
 job_id = await reindex.enqueue(doc_id=doc_id, result_ttl_ms=300_000)
 ```

@@ -4,6 +4,19 @@ Subscribing to streams somebody else writes runs in the process that already
 consumes your own queues, through the same consumer group. That is the point of
 the design: one worker loop, not a second deployment.
 
+The snippets on this page assume:
+
+```python
+from litestar_rs import Record
+from litestar_rs.plugin import QueueConfig, TaskRegistry
+
+tasks = TaskRegistry()
+
+
+async def on_order(record: Record) -> None: ...
+async def on_payment(record: Record) -> None: ...
+```
+
 ```python
 QueueConfig(
     registry=tasks,
@@ -22,12 +35,9 @@ A foreign entry has no envelope — the payload is in a format you did not choos
 receive the record as Redis returned it:
 
 ```python
-from litestar_rs import Record
-
 async def on_order(record: Record) -> None:
     sku = record.fields[b"sku"]
-    ...
-
+    print(sku)
 ```
 
 `litestar workers run` passes them to the worker for you. Using the core

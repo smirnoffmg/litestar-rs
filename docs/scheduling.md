@@ -7,6 +7,17 @@ makes a double pass a no-op.
 
 ## Delayed jobs
 
+The snippets on this page assume:
+
+```python
+from litestar_rs import CronJob, Envelope, RedisScheduler
+from litestar_rs.plugin import QueueConfig, TaskRegistry
+
+tasks = TaskRegistry()
+envelope = Envelope(id="job-1", task="reindex", payload=b"{}", enqueued_at=0)
+due_at_ms = 1_712_345_678_901
+```
+
 ```python
 from litestar_rs import RedisScheduler
 
