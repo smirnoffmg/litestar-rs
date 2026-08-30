@@ -8,6 +8,19 @@ version = "0.1.0"
 description = "Distributed task queue on Redis Streams with first-class Litestar integration"
 readme = "README.md"
 requires-python = ">=3.13"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Maksim Smirnov" }]
+keywords = ["litestar", "redis", "redis-streams", "task-queue", "worker", "cron"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Framework :: AnyIO",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Topic :: System :: Distributed Computing",
+    "Typing :: Typed",
+]
 dependencies = [
     "redis[hiredis]>=5.0",
     "msgspec>=0.18",
@@ -15,6 +28,12 @@ dependencies = [
     "uvloop>=0.21",
     "cronsim>=2.7",
 ]
+
+[project.urls]
+Homepage = "https://github.com/smirnoffmg/litestar-rs"
+Documentation = "https://smirnoffmg.github.io/litestar-rs"
+Source = "https://github.com/smirnoffmg/litestar-rs"
+Issues = "https://github.com/smirnoffmg/litestar-rs/issues"
 
 [project.optional-dependencies]
 litestar = ["litestar>=2.0"]
@@ -120,7 +139,7 @@ layers = [
     "transport : scheduler : results",
     "scripts",
     "protocols",
-    "cron : retry",
+    "cron : retry : clients",
     "envelope : keys",
     "errors",
 ]

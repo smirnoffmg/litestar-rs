@@ -10,6 +10,7 @@ from typing import Any
 
 from redis.asyncio import Redis
 
+from litestar_rs.core.clients import connection_kwarg
 from litestar_rs.core.cron import (
     CronJob,
     next_fire_ms,
@@ -44,7 +45,7 @@ class RedisScheduler:
         namespace: str = "lrs",
         shards: int = 1,
     ) -> None:
-        if control.connection_pool.connection_kwargs.get("decode_responses"):
+        if connection_kwarg(control, "decode_responses"):
             raise ConfigurationError(
                 "control client must be built with decode_responses=False; "
                 "scheduled payloads are opaque bytes"

@@ -6,6 +6,7 @@ from typing import Any
 from redis.asyncio import Redis
 from redis.exceptions import ResponseError
 
+from litestar_rs.core.clients import connection_kwarg
 from litestar_rs.core.envelope import Envelope, Pending, Record, to_fields
 from litestar_rs.core.errors import ConfigurationError, PayloadTooLarge
 from litestar_rs.core.keys import (
@@ -30,10 +31,6 @@ DEFAULT_MAX_PAYLOAD_BYTES = 128 * 1024
 
 # A traceback is for a human reading the DLQ, not a document store.
 MAX_DETAIL_BYTES = 8 * 1024
-
-
-def _connection_kwarg(client: Redis, name: str) -> Any:
-    return client.connection_pool.connection_kwargs.get(name)
 
 
 class RedisStreamsTransport:
@@ -69,7 +66,7 @@ class RedisStreamsTransport:
                 "XREADGROUP would otherwise stall acks and liveness refreshes"
             )
         for role, client in (("reader", reader), ("control", control)):
-            if _connection_kwarg(client, "decode_responses"):
+            if connection_kwarg(client, "decode_responses"):
                 raise ConfigurationError(
                     f"{role} client must be built with decode_responses=False; "
                     "stream payloads are opaque bytes"
@@ -91,7 +88,7 @@ class RedisStreamsTransport:
                 f"fairness_every must not be negative, got {fairness_every}"
             )
 
-        socket_timeout = _connection_kwarg(reader, "socket_timeout")
+        socket_timeout = connection_kwarg(reader, "socket_timeout")
         if socket_timeout is None:
             raise ConfigurationError(
                 "reader client needs an explicit socket_timeout, otherwise a read "

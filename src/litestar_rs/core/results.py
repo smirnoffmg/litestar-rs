@@ -11,6 +11,7 @@ from typing import Any
 import msgspec
 from redis.asyncio import Redis
 
+from litestar_rs.core.clients import connection_kwarg
 from litestar_rs.core.envelope import TaskResult
 from litestar_rs.core.errors import ConfigurationError
 from litestar_rs.core.keys import result_key, result_wait_key, validate_namespace
@@ -27,7 +28,7 @@ class RedisResultStore:
     def __init__(
         self, *, control: Redis, namespace: str = "lrs", default_ttl_ms: int = 3_600_000
     ) -> None:
-        if control.connection_pool.connection_kwargs.get("decode_responses"):
+        if connection_kwarg(control, "decode_responses"):
             raise ConfigurationError(
                 "control client must be built with decode_responses=False; "
                 "results are opaque bytes"
