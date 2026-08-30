@@ -1,33 +1,36 @@
 # litestar-rs
 
-Распределённая очередь задач на Redis Streams с first-class интеграцией в Litestar.
+A distributed task queue on Redis Streams, with first-class Litestar
+integration.
 
-Гарантия доставки — **at-least-once**. Хендлеры обязаны быть идемпотентными;
-для этого есть dedup-ключ, проверяемый непосредственно перед вызовом.
+**Delivery is at-least-once.** Handlers must be idempotent; a `dedup` key is
+provided for the cases where that is not naturally true. Treating delivery as
+exactly-once is a design error in the application, not a bug here.
 
-## Установка
+## Install
 
 ```bash
 uv add "litestar-rs[litestar]"
 ```
 
-## Задача
+The `litestar` extra is only needed for the plugin. The core — transport,
+worker, scheduler — has no Litestar dependency and is usable on its own.
 
-Параметры задачи делятся на две части при старте приложения: то, что приложение
-объявило зависимостью, инжектится в воркере; остальное едет в payload. Никакого
-словаря `ctx`.
+## Quickstart
 
 ```python
 from uuid import UUID
+
 from litestar import Litestar, post
 from litestar.di import Provide
+
 from litestar_rs.plugin import QueueConfig, QueuePlugin, TaskRegistry
 
 tasks = TaskRegistry()
 
 
 @tasks.task
-async def reindex(doc_id: UUID, session: AsyncSession, settings: Settings) -> None:
+async def reindex(doc_id: UUID, session: AsyncSession) -> None:
     ...
 
 
@@ -39,62 +42,39 @@ async def create(doc_id: UUID) -> str:
 
 app = Litestar(
     route_handlers=[create],
-    dependencies={"session": Provide(session), "settings": Provide(settings)},
+    dependencies={"session": Provide(session)},
     plugins=[QueuePlugin(QueueConfig(registry=tasks, redis_url="redis://localhost"))],
 )
 ```
 
-Воркер — та же команда, что и приложение:
+Workers are the same application, started differently:
 
 ```bash
 litestar workers run --queue high --concurrency 20
 ```
 
-## Что проверяется на старте, а не в рантайме
+## Two layers
 
-- задача зарегистрирована дважды;
-- аргумент payload без аннотации — его нечем валидировать;
-- зависимость, которой приложение не предоставляет;
-- цикл в графе зависимостей;
-- провайдер, которому нужен `request` или заголовки: у задачи запроса нет.
+- **`litestar_rs.core`** — transport, worker, scheduler, retries, results.
+  Depends on `redis`, `msgspec`, `anyio`. Importing Litestar from here is
+  forbidden, and an import-linter contract enforces it.
+- **`litestar_rs.plugin`** — dependency injection, CLI, serialization, health,
+  tracing.
 
-## Слои
+## Guides
 
-- **ядро** (`litestar_rs.core`) — транспорт, воркер, планировщик, ретраи.
-  Зависимости: `redis`, `msgspec`, `anyio`. Импорт Litestar запрещён и
-  проверяется import-linter.
-- **плагин** (`litestar_rs.plugin`) — DI, CLI, сериализация, health, трассировка.
+- [Tasks](tasks.md) — arguments, dependencies, what travels and what is injected
+- [Scheduling](scheduling.md) — delayed jobs, cron, missed occurrences
+- [Retries and the DLQ](retries.md) — the two counters, backoff, reading a buried job
+- [Priorities](priorities.md) — queues, fairness, shards
+- [Broker mode](broker.md) — consuming streams somebody else writes
+- [Results and deduplication](results.md) — waiting for an outcome, running once
+- [Testing](testing.md) — eager mode, assertions, a real worker in a fixture
+- [Operations](operations.md) — deployment, health, shutdown, depth
+- [API reference](api.md)
 
-Ядро пригодно к использованию без Litestar.
+## Redis
 
-## Постановка задачи внутри транзакции
-
-Задача, поставленная до `COMMIT`, может быть подхвачена воркером раньше, чем строка
-станет видимой, а при откате — исполниться по данным, которых нет. `DeferredEnqueuer`
-копит задачи и публикует их из `after_commit`:
-
-```python
-from litestar_rs import DeferredEnqueuer
-
-deferred = DeferredEnqueuer(plugin)
-# ... в обработчике: await reindex.enqueue(...) через deferred
-# в after_commit: await deferred.flush()
-# в rollback:     deferred.discard()
-```
-
-Это не transactional outbox: падение между commit и flush задачу теряет. Работа,
-которая обязана пережить и это, требует outbox в той же базе.
-
-## Тестирование приложения
-
-```python
-from litestar_rs import CollectingEnqueuer, EagerEnqueuer, worker_running
-```
-
-- `CollectingEnqueuer` — ничего не исполняет, даёт `assert_enqueued`;
-- `EagerEnqueuer` — исполняет задачу тут же, для юнит-тестов прикладного кода;
-- `worker_running` — настоящий воркер на время блока, с дренажом на выходе.
-
-## Документация
-
-Публичный API — в [API Reference](api.md).
+Redis 7 or newer: depth comes from the consumer group's `lag`, which earlier
+versions do not report. Standalone, Sentinel and Cluster deployments are all
+covered by the test suite, against both Redis 7 and 8.

@@ -153,3 +153,34 @@ async def test_calling_a_task_directly_still_works() -> None:
     await reindex(3)
 
     assert ran == [3]
+
+
+async def test_a_unit_of_work_can_hold_a_task_until_it_commits() -> None:
+    """pitfalls #1: publication has to be able to wait for the transaction."""
+    from litestar_rs.core.deferred import DeferredEnqueuer
+
+    registry, enqueuer, _ = build()
+    deferred = DeferredEnqueuer(enqueuer)
+
+    async with deferred.active():
+        await registry.enqueue("reindex", {"doc_id": uuid4()})
+        assert enqueuer.enqueued == [], "nothing may reach Redis before the commit"
+        assert len(deferred.pending) == 1
+
+    await deferred.flush()
+
+    assert [envelope.task for envelope, _ in enqueuer.enqueued] == ["reindex"]
+
+
+async def test_a_rolled_back_unit_of_work_publishes_nothing() -> None:
+    from litestar_rs.core.deferred import DeferredEnqueuer
+
+    registry, enqueuer, _ = build()
+    deferred = DeferredEnqueuer(enqueuer)
+
+    async with deferred.active():
+        await registry.enqueue("reindex", {"doc_id": uuid4()})
+    deferred.discard()
+    await deferred.flush()
+
+    assert enqueuer.enqueued == []

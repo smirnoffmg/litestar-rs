@@ -6,6 +6,7 @@ promotion and the read across queues and shards are all multi-key.
 """
 
 from collections.abc import Iterator
+from typing import Any
 from uuid import uuid4
 
 import anyio
@@ -120,6 +121,11 @@ async def test_a_namespace_occupies_one_slot_in_a_cluster(cluster: Topology) -> 
     namespace = f"t{uuid4().hex[:8]}"
     reader, control = cluster.clients()
     try:
+        # Guard the guard: with one owner the cross-slot rule still applies but
+        # nothing is ever redirected, and this test would quietly weaken.
+        info: dict[str, Any] = await control.cluster_info()
+        assert int(info["cluster_known_nodes"]) >= 3
+
         transport = RedisStreamsTransport(
             reader=reader,
             control=control,

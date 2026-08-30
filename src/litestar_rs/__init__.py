@@ -4,6 +4,7 @@ Delivery is at-least-once: handlers must be idempotent.
 """
 
 from litestar_rs.core import (
+    BrokerHandler,
     Codec,
     CollectingEnqueuer,
     ConfigurationError,
@@ -15,6 +16,7 @@ from litestar_rs.core import (
     JsonCodec,
     LitestarRsError,
     MalformedEnvelope,
+    PayloadStore,
     PayloadTooLarge,
     Pending,
     Record,
@@ -27,14 +29,18 @@ from litestar_rs.core import (
     StreamTransport,
     TaskHandler,
     TaskResult,
+    UnknownTask,
     WorkerConfig,
+    current_enqueuer,
     run,
     run_with_signals,
+    worker_running,
 )
 
 __version__ = "0.1.0"
 
 __all__ = [
+    "BrokerHandler",
     "Codec",
     "CollectingEnqueuer",
     "ConfigurationError",
@@ -46,6 +52,7 @@ __all__ = [
     "JsonCodec",
     "LitestarRsError",
     "MalformedEnvelope",
+    "PayloadStore",
     "PayloadTooLarge",
     "Pending",
     "Record",
@@ -58,8 +65,11 @@ __all__ = [
     "StreamTransport",
     "TaskHandler",
     "TaskResult",
+    "UnknownTask",
     "WorkerConfig",
     "__version__",
+    "current_enqueuer",
     "run",
     "run_with_signals",
+    "worker_running",
 ]

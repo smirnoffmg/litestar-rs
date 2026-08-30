@@ -13,8 +13,21 @@ that must survive that crash needs an outbox in the same database.
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from contextvars import ContextVar
+
 from litestar_rs.core.envelope import Envelope
 from litestar_rs.core.protocols import Enqueuer
+
+current_enqueuer: ContextVar[Enqueuer | None] = ContextVar(
+    "litestar_rs_enqueuer", default=None
+)
+"""The enqueuer in force for this unit of work, if one was bound.
+
+Set it and every enqueue inside the block routes through it, which is what lets
+publication know about the transaction without every call site being told.
+"""
 
 
 class DeferredEnqueuer:
@@ -52,3 +65,17 @@ class DeferredEnqueuer:
     def discard(self) -> None:
         """Drop everything buffered. For the rollback path."""
         self._pending.clear()
+
+    @asynccontextmanager
+    async def active(self) -> AsyncIterator[DeferredEnqueuer]:
+        """Route every enqueue in this block through the buffer.
+
+        Binding only. Whether the block ends in ``flush`` or ``discard`` is the
+        caller's decision, because only the caller knows how the transaction
+        ended.
+        """
+        token = current_enqueuer.set(self)
+        try:
+            yield self
+        finally:
+            current_enqueuer.reset(token)

@@ -14,6 +14,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import time
 from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Any
@@ -23,7 +24,7 @@ from redis.asyncio.sentinel import Sentinel
 from testcontainers.core.container import DockerContainer
 from testcontainers.core.waiting_utils import wait_for_logs
 
-CLUSTER_PORT = 7300
+CLUSTER_PORTS = (7310, 7311, 7312)
 MASTER_PORT = 7400
 REPLICA_PORT = 7401
 SENTINEL_PORT = 27400
@@ -55,63 +56,73 @@ class Topology:
         return self.make_client(socket_timeout=30.0), self.make_client()
 
 
-def cluster_container() -> Iterator[Topology]:
-    container = (
-        DockerContainer(IMAGE)
-        .with_command(
-            f"redis-server --port {CLUSTER_PORT} --cluster-enabled yes "
-            "--cluster-announce-ip 127.0.0.1 --cluster-node-timeout 5000 "
-            "--save '' --appendonly no"
-        )
-        .with_bind_ports(CLUSTER_PORT, CLUSTER_PORT)
+CLUSTER_BOOT = (
+    " && ".join(
+        f"redis-server --port {port} --cluster-enabled yes "
+        f"--cluster-config-file /tmp/n{port}.conf --cluster-announce-ip 127.0.0.1 "
+        "--cluster-node-timeout 5000 --save '' --appendonly no --daemonize yes"
+        for port in CLUSTER_PORTS
     )
+    + " && sleep infinity"
+)
+
+
+def cluster_container() -> Iterator[Topology]:
+    """Three nodes, so the slots have different owners.
+
+    A single node owning everything still enforces the cross-slot rule, but it
+    never issues a MOVED. Three do, which is the difference between checking the
+    key schema and checking that a client can follow the cluster around.
+    """
+    container = DockerContainer(IMAGE).with_command(f'sh -c "{CLUSTER_BOOT}"')
+    for port in CLUSTER_PORTS:
+        container = container.with_bind_ports(port, port)
     with container:
-        wait_for_logs(container, "Ready to accept connections", timeout=60)
-        # One node owning every slot still enforces the cross-slot rule, which is
-        # the rule the whole key schema exists to satisfy.
-        subprocess.run(  # noqa: S603  # fixed argv, no shell
-            [
-                DOCKER,
-                "exec",
-                container.get_wrapped_container().id,
-                "redis-cli",
-                "-p",
-                str(CLUSTER_PORT),
-                "cluster",
-                "addslotsrange",
-                "0",
-                "16383",
-            ],
-            check=True,
-            capture_output=True,
-        )
+        # The servers are daemonized, so their readiness never reaches the
+        # container's stdout; ask them instead.
+        for port in CLUSTER_PORTS:
+            wait_for_ping(container, port)
+        nodes = [f"127.0.0.1:{port}" for port in CLUSTER_PORTS]
+        run_in(container, ["redis-cli", "--cluster", "create", *nodes, "--cluster-yes"])
         wait_for_cluster_ready(container)
 
         def make(**kwargs: Any) -> Any:
-            return RedisCluster.from_url(f"redis://127.0.0.1:{CLUSTER_PORT}", **kwargs)
+            return RedisCluster.from_url(
+                f"redis://127.0.0.1:{CLUSTER_PORTS[0]}", **kwargs
+            )
 
         yield Topology(name="cluster", make_client=make)
 
 
+def run_in(container: DockerContainer, command: list[str]) -> str:
+    result = subprocess.run(  # noqa: S603  # fixed argv, no shell
+        [DOCKER, "exec", container.get_wrapped_container().id, *command],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return result.stdout
+
+
+def wait_for_ping(container: DockerContainer, port: int) -> None:
+    for _ in range(60):
+        try:
+            if "PONG" in run_in(container, ["redis-cli", "-p", str(port), "ping"]):
+                return
+        except subprocess.CalledProcessError:
+            pass
+        time.sleep(0.5)
+    raise RuntimeError(f"redis on port {port} never answered")
+
+
 def wait_for_cluster_ready(container: DockerContainer) -> None:
     for _ in range(60):
-        state = subprocess.run(  # noqa: S603  # fixed argv, no shell
-            [
-                DOCKER,
-                "exec",
-                container.get_wrapped_container().id,
-                "redis-cli",
-                "-p",
-                str(CLUSTER_PORT),
-                "cluster",
-                "info",
-            ],
-            check=True,
-            capture_output=True,
-            text=True,
-        ).stdout
+        state = run_in(
+            container, ["redis-cli", "-p", str(CLUSTER_PORTS[0]), "cluster", "info"]
+        )
         if "cluster_state:ok" in state:
             return
+        time.sleep(0.5)
     raise RuntimeError("cluster never reached cluster_state:ok")
 
 

@@ -16,4 +16,12 @@ plugins:
 
 nav:
   - Home: index.md
-  - API: api.md
+  - Tasks: tasks.md
+  - Scheduling: scheduling.md
+  - Retries and the DLQ: retries.md
+  - Priorities: priorities.md
+  - Broker mode: broker.md
+  - Results and deduplication: results.md
+  - Testing: testing.md
+  - Operations: operations.md
+  - API reference: api.md

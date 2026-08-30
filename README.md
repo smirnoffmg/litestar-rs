@@ -1,142 +1,236 @@
 # litestar-rs
 
-Распределённая очередь задач на Redis Streams с first-class интеграцией в Litestar.
+A distributed task queue on Redis Streams, with first-class Litestar integration.
 
-**Гарантия доставки — at-least-once.** Задача может быть исполнена больше одного раза:
-воркер, успевший выполнить побочный эффект и умерший до `XACK`, будет перезахвачен, и
-работа повторится. Никакая доработка протокола этого не устраняет — устраняет только
-идемпотентный хендлер. Библиотека даёт для этого dedup-ключ: поле `dedup` в записи,
-проверяемое воркером непосредственно перед вызовом хендлера (`SET NX PX`). Совпадение —
-задача пропускается и подтверждается; ожидание результата первой появится вместе с result backend. Считать доставку ровно-однократной
-— ошибка проектирования на стороне приложения, а не баг здесь.
+**Delivery is at-least-once.** A task can run more than once: a worker that
+completed its side effect and died before `XACK` will be reclaimed and the work
+repeated. No amount of protocol work removes that — only an idempotent handler
+does. The library gives you a gate for it: a `dedup` key on the record, claimed
+by the worker with `SET NX PX` immediately before the handler is called. A key
+already taken means the job is skipped and acknowledged. Treating delivery as
+exactly-once is a design error in the application, not a bug here.
 
-## Что строим
+## What this is
 
-Два слоя, разделённые жёстко:
+Two layers, hard-separated:
 
-- ядро: транспорт, воркер, планировщик. Зависимости: `redis`, `msgspec`, `anyio`. **Импорт Litestar здесь запрещён.**
-- плагин: DI, CLI, сериализация, health. Импортирует ядро.
+- **core** — transport, worker, scheduler. Depends on `redis`, `msgspec`,
+  `anyio`. **Importing Litestar here is forbidden.**
+- **plugin** — DI, CLI, serialization, health. Imports core.
 
-Ядро должно быть пригодно к использованию без Litestar.
+Core must be usable without Litestar.
 
-## Режимы
+## Modes
 
-1. **Очередь задач**: `enqueue → result`, типизированные аргументы, ретраи, отложенный запуск, cron.
-2. **Брокер**: подписка на внешние стримы с чужим форматом payload, без result backend.
+1. **Task queue**: `enqueue → result`, typed arguments, retries, delayed
+   execution, cron.
+2. **Broker**: subscription to external streams carrying somebody else's payload
+   format, with no result backend.
 
-Оба режима работают поверх одной consumer group и одного процесса воркера. Это главное отличие от аналогов — не ломать при рефакторинге.
+Both modes run over one consumer group and one worker process. That is the main
+thing separating this from the alternatives; do not break it in a refactor.
 
-## Инварианты транспорта
+## Transport invariants
 
-Нарушение любого из них — баг, а не компромисс.
+Violating any of these is a bug, not a trade-off.
 
-**Prefetch по кредитам.** `XREADGROUP COUNT = max(0, concurrency - in_flight)`. Не читать при нуле свободных слотов. Фиксированный COUNT приводит к перекосу распределения между воркерами (см. taskiq-redis#91).
+**Credit-based prefetch.** `XREADGROUP COUNT = max(0, concurrency - in_flight)`.
+Do not read with no free slots. A fixed COUNT skews distribution between workers
+(see taskiq-redis#91).
 
-**Ack удаляет запись.** `XACK` + `XDEL` в одном Lua-скрипте. `XACK` сам по себе оставляет запись в стриме — стрим течёт. Дополнительно фоновый `XTRIM MINID` по времени. `MAXLEN ~` не использовать: усечение по длине может выбросить неподтверждённое.
+**Ack removes the record.** `XACK` + `XDEL` in one Lua script. `XACK` alone
+leaves the record in the stream and the stream leaks. A background `XTRIM MINID`
+by time runs alongside. `MAXLEN ~` is not used: trimming by length can discard
+unacknowledged work.
 
-**Liveness отдельно от min-idle-time.** `XAUTOCLAIM` не отличает мёртвый воркер от живого с долгой задачей. Воркер держит `SET job:{id}:alive EX ttl` и продлевает его из супервизора воркера, а не из тела задачи. Reclaim — Lua-скрипт: проверить отсутствие ключа, затем `XCLAIM`. Прикладной код о heartbeat не знает и не должен.
+**Liveness is separate from min-idle-time.** `XAUTOCLAIM` cannot tell a dead
+worker from a live one running a long task. A worker holds
+`SET {ns}:alive:<entry> PX ttl` and refreshes it from the worker supervisor, not
+from the task body. Reclaim is a Lua script: check the key is absent, then
+`XCLAIM`. Application code knows nothing about the heartbeat, and should not.
 
-**Ретраи и перезахваты — разные счётчики.** `delivery_count` из `XPENDING` — счётчик reclaim, не прикладных ретраев. Хранить их раздельно, порог по каждому свой. Превышение → `XACK` + `XADD` в DLQ-стрим с оригинальным payload, причиной, трейсбеком, историей попыток. Поля DLQ-записи: всё из оригинальной записи плюс `dlq_reason` (`max_attempts`, `max_deliveries`, `unknown_task`, `malformed`), `dlq_detail` (трейсбек последнего падения), `dlq_source`, `dlq_deliveries`, `dlq_at`. История предыдущих попыток едет в самой записи полем `history` — по строке на упавшую попытку, обрезанной и ограниченной по числу, иначе задача, падающая по кругу, растит собственную запись.
+**Retries and reclaims are different counters.** `delivery_count` from
+`XPENDING` counts reclaims, not application retries. They are stored separately
+with a threshold each. Exceeding either → `XACK` + `XADD` to the DLQ stream with
+the original payload, a reason, a traceback and the attempt history. DLQ record
+fields: everything from the original record plus `dlq_reason` (`max_attempts`,
+`max_deliveries`, `unknown_task`, `malformed`), `dlq_detail` (the traceback of
+the final failure), `dlq_source`, `dlq_deliveries`, `dlq_at`. Earlier attempts
+ride in the record itself as `history` — one truncated line per failed attempt,
+capped in count, or a job failing in a loop grows its own record.
 
-Перенос в DLQ и постановка ретрая идут **до** `XACK`. Обратный порядок терял бы работу при падении между шагами; этот теряет только идемпотентность, которая и так не обещана.
+The DLQ write and the retry scheduling both happen **before** the `XACK`. The
+other order would lose work on a crash between the steps; this one only costs
+idempotency, which was never promised.
 
-**Планировщик без выделенного процесса.** ZSET для отложенных и cron. Перенос ZSET → стрим одним Lua: `ZRANGEBYSCORE LIMIT` → `XADD` → `ZREM` атомарно. Лидер выбирается через `SET NX EX` с продлением, любой воркер может им стать. Отдельный процесс-scheduler не вводить.
+**A scheduler with no dedicated process.** A ZSET holds delayed jobs and cron.
+Moving ZSET → stream is one Lua script: `ZRANGEBYSCORE LIMIT` → `XADD` → `ZREM`,
+atomically. The leader is elected with `SET NX PX` and renewed by
+compare-and-set; any worker can become one. No separate scheduler process.
 
-**Cron: опоздание вместо потери, пропущенные схлопываются.** Следующее срабатывание кладётся в ZSET сразу после предыдущего, поэтому простой флота задачу не теряет — она выполнится с опозданием. `enqueued_at` в записи несёт исходный момент срабатывания, а не момент попадания в стрим, так что опоздание видно принимающей стороне.
+**Cron: late rather than lost, and missed occurrences collapse.** The next
+occurrence goes into the ZSET as soon as the previous one fires, so an outage
+delays a job rather than dropping it. `enqueued_at` carries the instant the job
+was due rather than the instant it reached the stream, which is what makes a
+late run recognisable as late.
 
-Простой длиннее интервала расписания схлопывает пропущенные срабатывания в один запуск: суточная задача после трёхдневного простоя отработает один раз, а не три. Догоняющих запусков нет и не планируется — «выполнить все пропущенные» требует хранить историю срабатываний, а прикладной задаче почти всегда нужно не это, а привести состояние к текущему. Если наверстать нужно именно поштучно, задача обязана принимать обрабатываемый интервал аргументом и разбираться с ним сама.
+An outage longer than the schedule interval collapses the missed occurrences
+into a single run: a daily job comes back from three days down and runs once,
+not three times. Catch-up runs are not planned. Running every missed occurrence
+means keeping a history of firings, and what an application usually wants is not
+that but to bring state up to date. A job that genuinely needs to work through
+the gap must take the interval as an argument and handle it itself.
 
-**Приоритеты.** Строгого приоритета `XREADGROUP` не даёт: с `BLOCK` разблокируется по первому доступному стриму. Схема: неблокирующий проход по стримам от высокого к низкому → при пустом результате один блокирующий на всех. Счётчик проходов ограничивает голодание низкого приоритета.
+**Priorities.** `XREADGROUP` cannot express strict priority: with `BLOCK` it
+wakes on whichever stream has something. The scheme is a non-blocking sweep from
+high to low, and only when everything is empty a single blocking read across all
+of them. A pass counter bounds starvation of the low queue.
 
-**Ключи с хеш-тегами с первого коммита.** `{ns}:q:high`, `{ns}:q:low`, `{ns}:sched`. Мультиключевой `XREADGROUP` в Redis Cluster требует общего слота. Переделать схему ключей потом нельзя без миграции.
+**Hash-tagged keys from the first commit.** `{ns}:q:high:0`, `{ns}:q:low:0`,
+`{ns}:sched`. A multi-key `XREADGROUP` in Redis Cluster requires a common slot.
+The key schema cannot be changed later without a migration.
 
-**Метрика глубины — `lag` из `XINFO GROUPS`** (Redis 7+). `XLEN` после trim бессмыслен.
+**Depth is `lag` from `XINFO GROUPS`** (Redis 7+). `XLEN` after a trim is
+meaningless.
 
-## Инварианты слоя Litestar
+## Litestar layer invariants
 
-**Task scope в DI.** Резолвить граф `Provide` приложения на синтетическом scope-объекте: `sync_to_thread`, `use_cache`, генераторные зависимости с корректным teardown. Провайдер, которому реально нужен request/headers, — ошибка на старте воркера, не в рантайме. Целевой вид задачи:
+**Task scope in DI.** Resolve the application's `Provide` graph outside a
+request: `sync_to_thread`, `use_cache`, generator dependencies with correct
+teardown. A provider that genuinely needs a request or headers is an error at
+worker startup, not at runtime. The target shape of a task:
 
 ```python
 @app_tasks.task
 async def reindex(doc_id: UUID, db: AsyncSession, cfg: Settings) -> None: ...
 ```
 
-Словарь `ctx` как способ протащить зависимости не вводить ни в каком виде.
+A `ctx` dictionary as a way to smuggle dependencies through is not introduced in
+any form.
 
-**Сериализация — msgspec приложения.** Тот же encoder/decoder и `type_encoders`, что у Litestar. Сигнатуры задач валидируются той же машинерией, что и хендлеры; несовместимость аргументов ловится при регистрации, не в воркере.
+**Serialization is the application's msgspec.** The same encoder/decoder and
+`type_encoders` Litestar uses. Task signatures are settled by the same machinery
+as handlers; incompatible arguments are caught at registration, not in a worker.
 
-**CLI через `CLIPluginProtocol`.** Один энтрипоинт: `litestar workers run --queue high --concurrency 20`. Строковый путь к приложению (`"module:app"`) как обязательный параметр init — антипаттерн, не повторять.
+**CLI through `CLIPluginProtocol`.** One entrypoint:
+`litestar workers run --queue high --concurrency 20`. A string path to the
+application (`"module:app"`) as a required init parameter is an anti-pattern;
+do not repeat it.
 
-**Трассировка в полях стрима.** Запись стрима — hash-поля. `traceparent` кладётся отдельным полем рядом с payload, не внутрь него. Воркер восстанавливает span-контекст; цепочка HTTP → задача не рвётся.
+**Tracing in stream fields.** A stream record is a flat hash. `traceparent` goes
+in a field beside the payload, never inside it. The worker restores the span
+context, so the HTTP → task chain is not broken.
 
-**Обрыв соединения не убивает воркер.** Цикл потребления и все служебные циклы переживают ошибку соединения, логируют её и продолжают после паузы: redis-py переподключается на следующей команде, а записи, которые воркер успел взять, остаются в PEL и будут перезахвачены. Это и есть отказ, который даёт failover Sentinel — блокирующий `XREADGROUP` не возвращает ошибку сразу. Тест воспроизводит его через `CLIENT KILL`, без топологии Sentinel: проверяется реакция воркера, а не механика самого Sentinel.
+**A dropped connection does not kill the worker.** The consume loop and every
+supervisor loop survive a connection error, log it and carry on after a pause:
+redis-py reconnects on the next command, and records the worker had already
+taken stay in the PEL to be reclaimed. This is the failure a Sentinel failover
+produces — a blocking `XREADGROUP` does not return an error straight away. It is
+tested twice: with `CLIENT KILL` against a standalone server, and with a real
+`SENTINEL FAILOVER` under an in-flight job.
 
-**Health.** Плагин отдаёт эндпоинт с состоянием consumer group и лагом. Воркер поднимает тот же ASGI-эндпоинт, чтобы readiness-пробы для web- и worker-деплойментов были идентичны.
+**Health.** The plugin serves an endpoint with consumer group state and lag. The
+worker opens its connections through the same context manager, so readiness
+probes for the web and worker deployments ask the same question.
 
-## Контракты исполнения
+## Execution contracts
 
-**Таймаут гарантирован только для async-задач.** `anyio.fail_after` отменяет на ближайшем
-await; он не прервёт CPU-цикл без await, вызов в C-расширении и задачу в тредпуле — треды
-не убиваются. Поэтому синхронная задача с объявленным таймаутом **отвергается на старте**,
-а не тихо игнорирует его. Обещать таймаут и не выполнять его хуже, чем не обещать.
+**A timeout is guaranteed for async tasks only.** `anyio.fail_after` cancels at
+the next await; it will not interrupt a CPU loop with no await, a call inside a C
+extension, or a task in the thread pool — threads cannot be killed. A
+synchronous task that declares a timeout is therefore **refused at startup**
+rather than quietly ignoring it. Promising a timeout and not delivering it is
+worse than not offering one.
 
-**Синхронные задачи исполняются в тредпуле** с явно заданным размером (`thread_limit`).
-Дефолт asyncio — `min(32, cpu+4)` — тихая деградация. Блокирующий код в теле async-задачи
-остаётся проблемой приложения: он starve-ит продление liveness-ключа, и воркер, оставаясь
-живым, выглядит мёртвым.
+**Synchronous tasks run in a thread pool** of an explicitly configured size
+(`thread_limit`). The asyncio default of `min(32, cpu + 4)` is a silent
+bottleneck. Blocking code inside an async task remains the application's problem:
+it starves the liveness refresh, and a worker that is alive looks dead.
 
-**Крупные аргументы уезжают из Redis.** Выше порога payload кладётся в `PayloadStore`
-приложения, а в запись едет `payload_ref`. Без store порог транспорта просто отвергает
-запись — молча ничего не теряется. Redis держит стрим в памяти; мегабайтный payload — это
-прямой OOM.
+**Large arguments leave Redis.** Above a threshold the payload goes to the
+application's `PayloadStore` and the record carries a `payload_ref`. Without a
+store the transport's own limit refuses the record — nothing is dropped
+silently. Redis keeps the stream in memory; a payload measured in megabytes is a
+direct route to an OOM kill.
 
-## Не делаем
+## Not doing
 
-Web UI, поддержку не-Redis бэкендов, синхронный API, Python < 3.13, собственный формат сериализации.
+A web UI, non-Redis backends, a synchronous API, Python < 3.13, a serialization
+format of our own.
 
-## Тесты
+## Tests
 
-Обязательны и пишутся вместе с кодом, не после:
+Mandatory, written with the code rather than after it:
 
-- SIGKILL воркера с задачами в PEL → задача подхвачена другим воркером, ровно один раз
-- долгая задача (дольше min-idle-time) не реклеймится, пока жив
-- split-brain планировщика: два лидера не дублируют перенос из ZSET
-- стрим не растёт при устойчивом потоке ack
-- отложенная задача не теряется при trim
-- обрыв соединения под in-flight задачами: воркер продолжает работать, а не замолкает
-- весь мультиключевой набор против Redis Cluster: чтение по стримам, оба Lua-скрипта, перенос из ZSET
-- `SENTINEL FAILOVER` под in-flight задачей: воркер переживает смену мастера
-- упавшая задача возвращается с увеличенным `attempt`, а не крутится вечно
-- исчерпавшая попытки уезжает в DLQ с payload, причиной, трейсбеком и историей
-- запись, перезахваченная сверх порога, уезжает в DLQ, а не исполняется снова
-- неизвестное имя задачи откладывается, а хоронится только по порогу времени
-- cron через переход DST
-- синхронная задача исполняется вне цикла событий
-- синхронная задача с таймаутом отвергается на старте
-- пропущенное срабатывание cron выполняется с опозданием, а не теряется
-- простой длиннее интервала расписания даёт один запуск, а не по одному на каждое пропущенное
+- SIGKILL a worker with entries in the PEL → the job is picked up by another
+  worker, exactly once
+- a long task (longer than min-idle-time) is not reclaimed while it is alive
+- scheduler split brain: two leaders do not move the same job out of the ZSET
+  twice
+- the stream does not grow under a steady flow of acks
+- a delayed job is not lost by a trim
+- a dropped connection under in-flight work: the worker keeps going rather than
+  going quiet
+- the whole multi-key surface against Redis Cluster: reads across streams, both
+  Lua scripts, the ZSET promotion
+- `SENTINEL FAILOVER` under an in-flight job: the worker survives the promotion
+- a failing task comes back with `attempt` raised rather than looping forever
+- a task out of attempts lands in the DLQ with its payload, reason, traceback and
+  history
+- an entry reclaimed past its ceiling lands in the DLQ rather than running again
+- an unknown task name is deferred, and buried only on a time threshold
+- cron across a DST transition
+- a missed cron occurrence runs late rather than being lost
+- an outage longer than the schedule interval produces one run, not one per
+  missed occurrence
+- a synchronous task runs off the event loop
+- a synchronous task declaring a timeout is refused at startup
 
-Интеграционные — против реального Redis в контейнере, не против мока. Lua-скрипты тестируются отдельно на атомарность при конкурентных вызовах.
+Integration tests run against a real Redis in a container, never a mock. Lua
+scripts are tested separately for atomicity under concurrent calls.
 
-## Стиль
+## Style
 
-Полная типизация, `mypy --strict`. Публичный API — только то, что явно экспортировано из `__init__`. Ошибки конфигурации — на старте процесса, с указанием конкретного провайдера/задачи.
+Full typing, `mypy --strict`. The public API is only what `__init__` exports
+explicitly. Configuration errors surface at process startup, naming the specific
+provider or task.
 
-## Инструменты
+## Tooling
 
-Все четыре гоняются в pre-commit и в CI. Красный любой из них — merge заблокирован; `# noqa`, `# type: ignore` и `ignore_imports` без комментария с причиной не принимаются.
+All four run in pre-commit and in CI. Any of them red blocks the merge; `# noqa`,
+`# type: ignore` and `ignore_imports` without a comment giving the reason are not
+accepted.
 
-**ruff** — линтер и форматтер, других не подключаем. `target-version = "py313"`, форматирование `ruff format`. Набор правил минимум: `E`, `F`, `I`, `UP`, `B`, `ASYNC`, `S`, `RET`, `SIM`, `TID`, `PTH`, `RUF`. `ASYNC` и `B` обязательны: блокирующий вызов в корутине воркера и мутабельный дефолт в сигнатуре задачи — реальные баги этого проекта, а не стилистика. В тестах послабление только на `S101`.
+**ruff** — linter and formatter, no others. `target-version = "py313"`,
+formatting by `ruff format`. Rule set, minimum: `E`, `F`, `I`, `UP`, `B`,
+`ASYNC`, `S`, `RET`, `SIM`, `TID`, `PTH`, `RUF`. `ASYNC` and `B` are
+non-negotiable: a blocking call in a worker coroutine and a mutable default in a
+task signature are real bugs of this project, not style. Tests are relaxed on
+`S101` alone.
 
-**mypy** — `python_version = "3.13"`, `strict = true` на `src` и на `tests`. `disallow_untyped_defs`, `warn_return_any`, `warn_unused_ignores` включены. `ignore_missing_imports` глобально не ставим — только точечно, по модулю, с комментарием. Декоратор `@task` обязан сохранять сигнатуру: несовпадение типов аргументов ловится на месте вызова `enqueue`, а не в воркере.
+**mypy** — `python_version = "3.13"`, `strict = true` over `src` and `tests`.
+`disallow_untyped_defs`, `warn_return_any`, `warn_unused_ignores` are on.
+`ignore_missing_imports` is never set globally — only per module, with a comment.
+The `@task` decorator must preserve the signature: an argument type mismatch is
+caught where `enqueue` is called, not in a worker.
 
-**pytest** — `--strict-markers`, `--strict-config`, `-ra`. Маркеры: `unit` (без внешних зависимостей), `integration` (реальный Redis в контейнере), `slow`. Асинхронные тесты — через `anyio` (тот же рантайм, что у ядра), не `pytest-asyncio`. Порог покрытия ядра — 90%, покрытие Lua-скриптов считается по интеграционным тестам. Тесты не зависят от порядка выполнения и от реального времени: часы и таймеры мокаются, `sleep` в тесте — повод для ревью.
+**pytest** — `--strict-markers`, `--strict-config`, `-ra`. Markers: `unit` (no
+external dependencies), `integration` (a real Redis in a container), `slow`.
+Async tests run through `anyio` — the same runtime as the core — not
+pytest-asyncio. The coverage floor is 90%, and Lua coverage is counted through
+the integration tests. Tests do not depend on execution order or on real time:
+clocks and timers are injected, and a `sleep` in a test is grounds for review.
 
-**import-linter** — граница ядро/плагин из первого раздела проверяется машинно, не на словах. Контракты:
+**import-linter** — the core/plugin boundary from the first section is checked
+by machine rather than asserted in prose. Contracts:
 
-- `forbidden`: ядро не импортирует `litestar` и `click` ни транзитивно, ни под `TYPE_CHECKING`
-- `layers`: плагин → ядро, обратное направление запрещено
-- `independence`: транспорт, планировщик и result backend не импортируют друг друга напрямую, только общие протоколы
-- `forbidden`: тесты ядра не импортируют `litestar` — иначе «ядро работает без Litestar» ничем не подтверждено
+- `forbidden`: core imports neither `litestar` nor `click`, transitively or under
+  `TYPE_CHECKING`
+- `layers`: plugin → core, never the reverse
+- `independence`: transport, scheduler and result backend do not import each
+  other, only shared protocols
+- `forbidden`: core tests do not import `litestar` — otherwise "core works
+  without Litestar" is confirmed by nothing
 
-Контракты добавляются первым коммитом слоя, а не после того, как граница уже нарушена.
+Contracts land with the first commit of a layer, not after the boundary has
+already been crossed.

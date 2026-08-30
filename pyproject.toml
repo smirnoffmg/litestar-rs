@@ -77,7 +77,7 @@ known-first-party = ["litestar_rs"]
 [tool.mypy]
 python_version = "3.13"
 strict = true
-files = ["src", "tests"]
+files = ["src", "tests", "examples"]
 mypy_path = ["src"]
 warn_return_any = true
 warn_unused_ignores = true

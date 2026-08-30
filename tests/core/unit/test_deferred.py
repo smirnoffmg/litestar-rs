@@ -66,3 +66,16 @@ async def test_a_failed_flush_does_not_republish_on_the_next_one() -> None:
         await deferred.flush()
 
     assert deferred.pending == ()
+
+
+async def test_a_bound_enqueuer_is_only_in_force_inside_its_block() -> None:
+    """A unit of work must not leak its buffer into the next request."""
+    from litestar_rs.core.deferred import current_enqueuer
+
+    target = CollectingEnqueuer()
+    deferred = DeferredEnqueuer(target)
+
+    assert current_enqueuer.get() is None
+    async with deferred.active() as bound:
+        assert current_enqueuer.get() is bound
+    assert current_enqueuer.get() is None

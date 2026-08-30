@@ -1,86 +1,136 @@
 # PITFALLS.md
 
-Проблемы, не относящиеся к Redis, и потому всплывающие уже в проде. Дополнение к `README.md`, где описан транспортный слой.
+Problems that have nothing to do with Redis, and therefore surface in
+production. A companion to `README.md`, which covers the transport layer.
 
-Каждый пункт — требование к дизайну, а не заметка на будущее. Решения, помеченные как архитектурные, ретроспективно не вставляются.
+Every item here is a design requirement, not a note for later. Decisions marked
+architectural cannot be retrofitted.
 
 ---
 
-## 1. Постановка задачи внутри транзакции БД
+## 1. Enqueueing inside a database transaction
 
-Хендлер пишет строку и вызывает `enqueue` до `COMMIT`. Воркер забирает задачу за миллисекунды, идёт в БД и строки не видит. Либо транзакция откатывается, а задача уже исполнена.
+A handler writes a row and calls `enqueue` before `COMMIT`. The worker takes the
+job within milliseconds, goes to the database and does not find the row. Or the
+transaction rolls back and the job has already run.
 
-Варианта два:
+Two options:
 
-- **Transactional outbox** — запись задачи в ту же БД той же транзакцией, отдельный relay переносит в стрим. Надёжно, дороже.
-- **Отложенная публикация** — накопить `enqueue` и вытолкнуть в `after_commit`-хуке SQLAlchemy. Покрывает большинство случаев.
+- **Transactional outbox** — write the job to the same database in the same
+  transaction, with a separate relay moving it to the stream. Reliable, more
+  expensive.
+- **Deferred publication** — buffer the `enqueue` calls and flush them from
+  SQLAlchemy's `after_commit` hook. Covers most cases.
 
-Второе — дефолт. Требует, чтобы `enqueue` знал о текущей сессии, то есть **не может быть свободной функцией без контекста**. Заложить в сигнатуру сразу.
+The second is the default. It requires `enqueue` to know about the current
+session, which means it **cannot be a free function with no context**. Build that
+into the signature from the start.
 
 ## 2. Graceful shutdown
 
-- SIGTERM → прекратить чтение стрима, дорабатывать in-flight. Максимальный таймаут задачи и `terminationGracePeriodSeconds` в манифесте — связанные величины, вынести в документацию явно.
-- Задача, снятая при shutdown, **не ack-ается** — остаётся в PEL. Отличать от прикладного отказа.
-- Watchdog после мягкой отмены: ждать N секунд, затем жёстко. Прикладной `except:` без типа съедает `CancelledError`, и воркер не завершится никогда.
-- Второй SIGTERM/SIGINT означает «сейчас», а не игнорируется.
+- SIGTERM → stop reading the stream, let in-flight work finish. The maximum task
+  timeout and `terminationGracePeriodSeconds` in the manifest are related
+  quantities; document the relationship explicitly.
+- A task cancelled at shutdown is **not acked** and stays in the PEL.
+  Distinguish it from an application failure.
+- A watchdog after the soft cancellation: wait N seconds, then cut it off.
+  An application-level bare `except:` swallows `CancelledError` and the worker
+  never exits.
+- A second SIGTERM/SIGINT means "now", and is not ignored.
 
-## 3. Rolling deploy и неизвестные имена задач
+## 3. Rolling deploys and unknown task names
 
-Во время выката работают воркеры v1 и v2 одновременно. Воркер v1 достаёт задачу, которой нет в его реестре.
+During a rollout, v1 and v2 workers run at the same time. A v1 worker pulls a
+task that is not in its registry.
 
-DLQ — потеря валидной работы. Бесконечный цикл — залипание.
+The DLQ loses valid work. An infinite loop wedges.
 
-Правильно: не ack, вернуть в стрим с задержкой, отдельный счётчик `unknown_task` и метрика. Задача доедет до v2. Порог DLQ по этому счётчику — по времени (часы), не по числу попыток.
+The right answer: do not ack, put it back on the stream with a delay, count
+`unknown_task` separately and expose the metric. The task will reach v2. The DLQ
+threshold on that counter is measured in time (hours), not attempts.
 
-Эволюция аргументов: добавление поля с дефолтом безопасно, удаление — нет. Десериализация аргументов **не строгая по лишним полям**.
+Argument evolution: adding a field with a default is safe, removing one is not.
+Argument deserialization is **not strict about unknown fields**.
 
-## 4. Блокирующий код и голодание служебных корутин
+## 4. Blocking code and starving the service coroutines
 
-Синхронный драйвер или CPU-тяжёлое тело блокируют цикл событий. Страдает не пропускная способность, а ack и продление liveness-ключа: воркер жив, но выглядит мёртвым, его задачи реклеймятся, работа дублируется.
+A synchronous driver or a CPU-heavy body blocks the event loop. What suffers is
+not throughput but the ack and the liveness key refresh: the worker is alive but
+looks dead, its tasks are reclaimed and the work is duplicated.
 
-- Служебные операции — вне цикла событий (отдельный тред, позже Rust-сторона).
-- Явный `sync`-режим задач с исполнением в тредпуле.
-- Размер тредпула задавать своим значением. Дефолт asyncio `min(32, cpu+4)` — источник тихой деградации.
+- Service operations run off the event loop (a separate thread, later the Rust
+  side).
+- An explicit `sync` mode for tasks, executed in a thread pool.
+- Size the thread pool yourself. The asyncio default of `min(32, cpu + 4)` is a
+  source of silent degradation.
 
-## 5. Таймауты, которые не работают
+## 5. Timeouts that do not work
 
-`asyncio.timeout` отменяет на ближайшем await. Не прервёт: CPU-цикл без await, вызов в C-расширении, задачу в тредпуле (треды не убиваются).
+`asyncio.timeout` cancels at the next await. It will not interrupt a CPU loop
+with no await, a call inside a C extension, or a task in the thread pool —
+threads cannot be killed.
 
-Контракт в документации: таймаут гарантирован **только для async-задач**. Для sync-задач гарантируется исполнение в тредпуле без прерывания. Жёсткий таймаут требует изоляции в процессе — тогда форк с открытыми соединениями Redis и живым циклом событий, их надо закрывать и пересоздавать в потомке.
+The contract, in the documentation: a timeout is guaranteed **for async tasks
+only**. For sync tasks what is guaranteed is execution in a thread pool without
+interruption. A hard timeout requires process isolation, and forking with open
+Redis connections and a live event loop means closing and recreating them in the
+child.
 
-Обещать таймаут и не выполнять его хуже, чем не обещать.
+Promising a timeout and not delivering it is worse than not offering one.
 
-## 6. Время и соединения
+## 6. Time and connections
 
-- Планировщик не использует локальное время воркеров: расхождение часов между подами даёт задачи, стартующие раньше или позже. Источник времени — `TIME` самого Redis внутри Lua.
-- Блокирующий `XREADGROUP BLOCK` занимает соединение целиком. Не брать из общего пула, иначе ack и служебные команды встают за ним в очередь. **Минимум два соединения на воркер.**
-- При failover Sentinel висящий `XREADGROUP` не вернёт ошибку сразу. `socket_timeout` меньше `BLOCK` плюс явная переустановка соединения, иначе воркер молча перестаёт работать, оставаясь «здоровым» по пробам.
+- The scheduler does not use the workers' local time: clock skew between pods
+  produces jobs that start early or late. The time source is Redis's own `TIME`,
+  inside Lua.
+- A blocking `XREADGROUP BLOCK` occupies its connection entirely. Do not take it
+  from the shared pool, or acks and service commands queue behind it. **At least
+  two connections per worker.**
+- During a Sentinel failover a parked `XREADGROUP` does not return an error
+  straight away. A finite `socket_timeout` plus an explicit reconnect, or the
+  worker silently stops working while still looking healthy to its probes.
 
-## 7. Идемпотентность как контракт
+## 7. Idempotency as a contract
 
-Гарантия — at-least-once. Пишется в README первым абзацем, а не в разделе FAQ.
+The guarantee is at-least-once. That belongs in the first paragraph of the
+README, not in an FAQ section.
 
-Дать инструмент: dedup-ключ на задачу (`SET NX EX`), проверяемый до исполнения, с явным выбором поведения при совпадении — пропустить или дождаться результата первой. Без этого пользователи напишут неидемпотентные задачи и будут считать баги нашими.
+Provide the tool: a per-task dedup key (`SET NX EX`) checked before execution,
+with an explicit choice of what a collision does — skip, or wait for the first
+one's result. Without it users will write non-idempotent tasks and consider the
+resulting bugs ours.
 
-## 8. Справедливость между источниками
+## 8. Fairness between sources
 
-Один арендатор или один тип задач заливает очередь на миллион записей — остальные не обслуживаются часами. Приоритеты не помогают: они про типы, а не про источники.
+One tenant, or one kind of task, floods the queue with a million records and
+everyone else waits for hours. Priorities do not help: they are about kinds, not
+sources.
 
-Шардинг стримов по ключу с round-robin чтением либо квоты. **Архитектурное решение, вставить потом нельзя.**
+Shard the streams by key with round-robin reads, or use quotas. **An
+architectural decision; it cannot be added later.**
 
 ## 9. Payload
 
-- Redis в памяти: крупные аргументы — прямой OOM. Порог (64–256 КБ), выше которого payload уезжает в S3/БД, а в стрим кладётся ссылка. Нужен с самого начала, иначе первый же «передадим сюда датафрейм» уронит инстанс.
-- Сериализация — msgspec/JSON по явной схеме. **`pickle` не вводить ни в каком виде**: десериализация payload из Redis — это RCE при компрометации Redis.
-- Отображение «имя задачи → функция» — строго по реестру. Никакого импорта по строке из сообщения.
+- Redis is in memory: large arguments are a direct OOM. A threshold (64–256 KB)
+  above which the payload goes to S3 or a database and the stream carries a
+  reference. Needed from the start, or the first "let's pass a dataframe through
+  here" takes the instance down.
+- Serialization is msgspec/JSON against an explicit schema. **Do not introduce
+  `pickle` in any form**: deserializing a payload out of Redis is remote code
+  execution the moment Redis is compromised.
+- The task-name → function mapping goes strictly through a registry. Never import
+  by a string taken from the message.
 
-## 10. Тестируемость
+## 10. Testability
 
-Без этого библиотеку не выберут:
+Without this, nobody chooses the library:
 
-- eager-режим — задача исполняется синхронно в момент enqueue, для юнит-тестов;
-- pytest-фикстура с реальным воркером в фоне для интеграционных;
-- детерминированное время для cron и отложенных;
-- `assert_enqueued` — проверка факта постановки без исполнения.
+- an eager mode, where the task runs synchronously at enqueue time, for unit
+  tests;
+- a pytest fixture running a real worker in the background, for integration
+  tests;
+- deterministic time for cron and delayed jobs;
+- `assert_enqueued` — checking that a job was queued without running it.
 
-Не второстепенно. Это то, чем библиотека отличается от чужой в глазах того, кто выбирает.
+This is not secondary. It is what distinguishes the library from somebody else's
+in the eyes of whoever is choosing.

@@ -1,13 +1,13 @@
-# API Reference
+# API reference
 
-## Ядро
+## Core
 
 ::: litestar_rs.core
     options:
       show_root_heading: true
       members: true
 
-## Плагин Litestar
+## Litestar plugin
 
 ::: litestar_rs.plugin
     options:

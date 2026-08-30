@@ -1,39 +1,21 @@
-# Список работ
+# Work list
 
-Всё из `README.md` и `pitfalls.md` реализовано и покрыто тестами. Здесь — то, что
-осталось за их пределами.
+Everything in `README.md` and `pitfalls.md` is implemented and covered by tests.
+This is what sits outside them.
 
-## Документация
+## Release
 
-- [ ] **Перевести всю документацию на английский.** Сейчас `README.md`, `pitfalls.md`
-      и `docs/` на русском, а докстринги и комментарии в коде — на английском. Разнобой:
-      определиться на английском и привести к нему всё, включая этот файл.
-- [ ] **Наполнить `docs/`.** Сейчас там только `index.md` и автогенерируемый `api.md`.
-      Нужны разделы под то, что уже есть в коде:
-      - задачи и их аргументы, что инжектится и что едет в payload;
-      - отложенный запуск и cron, включая контракт по пропущенным срабатываниям;
-      - ретраи, два счётчика и DLQ: как читать запись в DLQ и как её переиграть;
-      - приоритеты и справедливость;
-      - режим брокера;
-      - результаты и dedup;
-      - эксплуатация: развёртывание воркера, health, shutdown и
-        `terminationGracePeriodSeconds`, метрика глубины.
-- [ ] **Сделать `examples/`.** Минимум: приложение с одной задачей и воркером,
-      cron-задача, режим брокера, отложенная публикация из `after_commit`.
-      Примеры должны запускаться и проверяться в CI, иначе они протухнут.
+- [ ] Publish the first release to PyPI. The pipeline is ready and the metadata
+      is complete; a version number on PyPI cannot be reused, so the timing is a
+      decision rather than a step.
 
-## Непроверенные утверждения
+## Later
 
-- [x] **Redis Cluster.** Проверен: `tests/core/integration/test_topologies.py`
-      гоняет весь мультиключевой набор против одноузлового кластера, владеющего
-      всеми слотами (правило CROSSSLOT он применяет так же, как многоузловой).
-- [x] **Матрица версий Redis в CI.** Джоба `test` гоняется против `redis:7-alpine`
-      и `redis:8-alpine` через переменную `REDIS_IMAGE`; локально прогон под 8 зелёный.
-- [x] **Топология Sentinel.** Проверена, включая принудительный `SENTINEL FAILOVER`
-      под in-flight задачей.
-- [ ] **Многоузловой кластер.** Сейчас один узел со всеми слотами: правило CROSSSLOT
-      он проверяет, а перешардирование и MOVED/ASK — нет.
-
-## Релиз
-
-- [ ] Запушить накопленные коммиты и выпустить первый релиз.
+- [ ] **Cluster resharding.** The suite runs against a three-node cluster, so
+      MOVED redirects happen and the cross-slot rule has real owners behind it.
+      Moving slots between nodes while a worker is consuming is not covered.
+- [ ] **Metrics.** Depth is exposed through the health endpoint; there is no
+      counter for `unknown_task`, retries or DLQ writes, which `pitfalls.md` §3
+      asks for by name.
+- [ ] **A payload store implementation.** The seam and the threshold exist; no
+      backend ships, so every user writes the same S3 adapter.

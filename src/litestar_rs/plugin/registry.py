@@ -22,6 +22,7 @@ from litestar.di import Provide
 from litestar.serialization import decode_json, encode_json, get_serializer
 from litestar.types import TypeDecodersSequence, TypeEncodersMap
 
+from litestar_rs.core.deferred import current_enqueuer
 from litestar_rs.core.envelope import Envelope, TaskResult
 from litestar_rs.core.errors import ConfigurationError
 from litestar_rs.core.protocols import (
@@ -201,7 +202,10 @@ class TaskRegistry:
         dedup: str | None = None,
     ) -> str:
         task = self.bound(name)
-        if self._enqueuer is None:  # pragma: no cover - bind() always sets it
+        # A unit of work may have bound its own, so that publication can wait for
+        # the transaction that justified it.
+        enqueuer = current_enqueuer.get() or self._enqueuer
+        if enqueuer is None:  # pragma: no cover - bind() always sets it
             raise ConfigurationError("registry has no enqueuer")
         # Building the payload struct here is what makes a bad argument a caller's
         # problem rather than a worker's.
@@ -228,7 +232,7 @@ class TaskRegistry:
             result_ttl_ms=result_ttl_ms,
             dedup=dedup,
         )
-        await self._enqueuer.enqueue(envelope, queue=task.queue)
+        await enqueuer.enqueue(envelope, queue=task.queue)
         return job_id
 
     async def execute(self, envelope: Envelope) -> Any:

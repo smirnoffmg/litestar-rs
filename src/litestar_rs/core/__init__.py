@@ -1,7 +1,7 @@
 """Transport, worker and scheduling core. Importing Litestar from here is forbidden."""
 
 from litestar_rs.core.cron import CronJob
-from litestar_rs.core.deferred import DeferredEnqueuer
+from litestar_rs.core.deferred import DeferredEnqueuer, current_enqueuer
 from litestar_rs.core.envelope import (
     ENVELOPE_VERSION,
     Envelope,
@@ -22,6 +22,7 @@ from litestar_rs.core.protocols import (
     BrokerHandler,
     Codec,
     Enqueuer,
+    PayloadStore,
     ResultStore,
     Scheduler,
     Sleeper,
@@ -54,6 +55,7 @@ __all__ = [
     "JsonCodec",
     "LitestarRsError",
     "MalformedEnvelope",
+    "PayloadStore",
     "PayloadTooLarge",
     "Pending",
     "Record",
@@ -69,6 +71,7 @@ __all__ = [
     "TaskResult",
     "UnknownTask",
     "WorkerConfig",
+    "current_enqueuer",
     "from_fields",
     "run",
     "run_with_signals",
