@@ -66,6 +66,7 @@ enable_error_code = ["ignore-without-code", "redundant-expr", "truthy-bool"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra --strict-markers --strict-config"
+anyio_mode = "auto"
 pythonpath = ["src"]
 markers = [
     "unit: no external dependencies",
