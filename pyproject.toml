@@ -36,7 +36,7 @@ dependencies = [
 
 [project.urls]
 Homepage = "https://github.com/smirnoffmg/litestar-rs"
-Documentation = "https://smirnoffmg.github.io/litestar-rs"
+Documentation = "https://smirnoffmg.dev/litestar-rs/"
 Source = "https://github.com/smirnoffmg/litestar-rs"
 Issues = "https://github.com/smirnoffmg/litestar-rs/issues"
 

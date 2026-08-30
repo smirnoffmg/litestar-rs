@@ -48,3 +48,20 @@ def test_the_pages_the_navigation_promises_exist() -> None:
     present = {page.name for page in (ROOT / "docs").glob("*.md")}
 
     assert linked == present, "a page is either unlinked or missing"
+
+
+def test_the_documentation_url_agrees_everywhere() -> None:
+    """It ends up in package metadata, which cannot be corrected after a release."""
+    import tomllib
+
+    with (ROOT / "pyproject.toml").open("rb") as handle:
+        documented = tomllib.load(handle)["project"]["urls"]["Documentation"]
+
+    site_url = next(
+        line.split(":", 1)[1].strip()
+        for line in (ROOT / "mkdocs.yml").read_text().splitlines()
+        if line.startswith("site_url:")
+    )
+
+    assert documented.rstrip("/") == site_url.rstrip("/")
+    assert documented.rstrip("/") in (ROOT / "README.md").read_text()

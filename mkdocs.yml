@@ -1,6 +1,6 @@
 site_name: litestar-rs
 site_description: Distributed task queue on Redis Streams with first-class Litestar integration
-site_url: https://github.com/smirnoffmg/litestar-rs
+site_url: https://smirnoffmg.dev/litestar-rs/
 
 theme:
   name: material
