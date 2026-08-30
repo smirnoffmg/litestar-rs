@@ -36,8 +36,6 @@ async def on_order(record: Record) -> None:
     await send_receipt.enqueue(order_id=order_id)
 
 
-brokers = {ORDERS: on_order}
-
 app = Litestar(
     route_handlers=[],
     plugins=[
@@ -46,7 +44,8 @@ app = Litestar(
                 registry=tasks,
                 redis_url=REDIS_URL,
                 namespace="example-broker",
-                external=(ORDERS,),
+                # One mapping: which streams to consume, and what handles each.
+                brokers={ORDERS: on_order},
             )
         )
     ],

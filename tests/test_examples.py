@@ -47,8 +47,11 @@ def test_the_cron_example_schedules_only_registered_tasks() -> None:
     assert scheduled <= set(cron_jobs.tasks.names)
 
 
-def test_the_broker_example_handles_the_stream_it_subscribes_to() -> None:
+def test_the_broker_example_subscribes_to_what_it_handles() -> None:
+    """The streams read and the handlers registered are one thing, not two."""
     from examples import broker_mode
 
     plugin = next(p for p in broker_mode.app.plugins if isinstance(p, QueuePlugin))
-    assert set(broker_mode.brokers) == set(plugin.config.external)
+
+    assert set(plugin.config.brokers) == {broker_mode.ORDERS}
+    assert plugin.config.external == (broker_mode.ORDERS,)

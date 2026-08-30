@@ -7,9 +7,13 @@ the design: one worker loop, not a second deployment.
 ```python
 QueueConfig(
     registry=tasks,
-    external=("{lrs}:orders", "{lrs}:payments"),
+    brokers={"{lrs}:orders": on_order, "{lrs}:payments": on_payment},
 )
 ```
+
+One mapping rather than a list of streams beside a dictionary of handlers: a
+stream with no handler is read and dropped, a handler for a stream nobody
+subscribes to never runs, and two fields that must agree eventually will not.
 
 ## Handlers get the raw record
 
@@ -24,10 +28,10 @@ async def on_order(record: Record) -> None:
     sku = record.fields[b"sku"]
     ...
 
-brokers = {"{lrs}:orders": on_order}
 ```
 
-Pass them to `run(...)` or `run_with_signals(...)` as `brokers=`.
+`litestar workers run` passes them to the worker for you. Using the core
+directly, they go to `run(...)` or `run_with_signals(...)` as `brokers=`.
 
 ## What is different
 

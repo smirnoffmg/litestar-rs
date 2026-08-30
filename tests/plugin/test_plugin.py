@@ -10,6 +10,7 @@ from litestar.di import Provide
 from litestar.testing import AsyncTestClient
 from redis.asyncio import Redis
 
+from litestar_rs import Record
 from litestar_rs.core.errors import ConfigurationError
 from litestar_rs.core.keys import stream_key
 from litestar_rs.core.testing import worker_running
@@ -162,3 +163,82 @@ def test_the_plugin_extends_the_cli(redis_url: str, namespace: str) -> None:
     plugin.on_cli_init(group)
 
     assert "workers" in group.commands
+
+
+async def test_a_foreign_entry_reaches_its_handler_through_the_plugin(
+    redis_url: str, namespace: str
+) -> None:
+    """The wiring, end to end.
+
+    The handler is registered on the config and nowhere else, exactly as an
+    application would do it, and a real entry on the foreign stream has to reach
+    it -- which is the part that was decorative before.
+    """
+    seen: list[bytes] = []
+    arrived = anyio.Event()
+    foreign = f"{{{namespace}}}:orders"
+
+    async def on_order(record: Record) -> None:
+        seen.append(record.fields[b"sku"])
+        arrived.set()
+
+    registry = TaskRegistry()
+    plugin = QueuePlugin(
+        QueueConfig(
+            registry=registry,
+            redis_url=redis_url,
+            namespace=namespace,
+            block_ms=100,
+            brokers={foreign: on_order},
+            worker=WorkerConfig(
+                concurrency=2,
+                min_idle_ms=0,
+                reclaim_interval_s=0.05,
+                trim_interval_s=60.0,
+                scheduler_interval_s=0.05,
+            ),
+        )
+    )
+
+    async with plugin.connected(consumer="test-worker"):
+        registry.bind({}, enqueuer=plugin)
+        await plugin.transport.control.xadd(foreign, {b"sku": b"A1"})
+
+        with anyio.fail_after(30):
+            async with worker_running(
+                plugin.transport,
+                registry.handlers(),
+                plugin.config.worker,
+                scheduler=plugin.scheduler,
+                brokers=plugin.config.brokers,
+            ):
+                await arrived.wait()
+
+    assert seen == [b"A1"]
+
+
+async def test_the_cli_passes_the_worker_everything_it_takes(
+    redis_url: str, namespace: str
+) -> None:
+    """Broker handlers were configurable and then dropped on the way to the worker.
+
+    Anything optional the worker grows must be wired here, and this is what says
+    so before somebody debugs a handler that never runs.
+    """
+    import inspect
+
+    from litestar_rs.core.worker import run_with_signals
+    from litestar_rs.plugin.cli import worker_arguments
+
+    _, plugin = make_app(redis_url, namespace)
+
+    async with plugin.connected(consumer="test-worker"):
+        wired = set(worker_arguments(plugin, plugin.config))
+
+    accepted = {
+        name
+        for name, parameter in inspect.signature(run_with_signals).parameters.items()
+        if parameter.kind is inspect.Parameter.KEYWORD_ONLY
+    }
+
+    assert wired == accepted, f"the CLI never passes: {sorted(accepted - wired)}"

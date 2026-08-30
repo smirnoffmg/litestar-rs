@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from functools import partial
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import anyio
 import click
@@ -20,6 +20,22 @@ from litestar_rs.plugin.plugin import QueuePlugin
 
 if TYPE_CHECKING:
     from litestar import Litestar
+
+
+def worker_arguments(plugin: QueuePlugin, config: QueueConfig) -> dict[str, Any]:
+    """Everything beyond the transport, the registry and the worker settings.
+
+    Built in one place so that a feature added to the worker and forgotten here
+    is caught by a test rather than by somebody wondering why their handlers
+    never run.
+    """
+    return {
+        "scheduler": plugin.scheduler,
+        "results": plugin.results,
+        "brokers": config.brokers,
+        "stats": plugin.stats,
+        "cron": config.cron,
+    }
 
 
 async def serve_health(plugin: QueuePlugin, host: str, port: int) -> None:
@@ -99,10 +115,7 @@ def run_workers(
                 plugin.transport,
                 config.registry.handlers(),
                 config.worker,
-                scheduler=plugin.scheduler,
-                results=plugin.results,
-                stats=plugin.stats,
-                cron=config.cron,
+                **worker_arguments(plugin, config),
             )
             tg.cancel_scope.cancel()
 

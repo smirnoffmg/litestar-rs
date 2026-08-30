@@ -13,7 +13,14 @@ import anyio
 from litestar_rs.core.cron import CronJob
 from litestar_rs.core.envelope import Envelope
 from litestar_rs.core.errors import LitestarRsError
-from litestar_rs.core.protocols import Scheduler, StreamTransport, TaskHandler
+from litestar_rs.core.protocols import (
+    BrokerHandler,
+    ResultStore,
+    Scheduler,
+    StreamTransport,
+    TaskHandler,
+)
+from litestar_rs.core.stats import WorkerStats
 from litestar_rs.core.worker import WorkerConfig, run
 
 
@@ -78,6 +85,9 @@ async def worker_running(
     config: WorkerConfig | None = None,
     *,
     scheduler: Scheduler,
+    results: ResultStore | None = None,
+    brokers: Mapping[str, BrokerHandler] | None = None,
+    stats: WorkerStats | None = None,
     cron: Sequence[CronJob] = (),
 ) -> AsyncGenerator[None]:
     """Run a real worker for the duration of the block, then stop it cleanly.
@@ -94,6 +104,9 @@ async def worker_running(
                 registry,
                 config,
                 scheduler=scheduler,
+                results=results,
+                brokers=brokers,
+                stats=stats,
                 cron=cron,
                 shutdown=stop,
             )
