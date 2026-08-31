@@ -151,6 +151,22 @@ def test_every_example_module_is_covered_here() -> None:
     assert modules - standalone == set(EXAMPLES)
 
 
+def test_every_example_is_listed_in_the_readme() -> None:
+    """An example nobody lists is an example nobody finds.
+
+    The table presents itself as the index of the directory, so half a table is
+    worse than none: a reader takes what is there for the whole of it.
+    """
+    import re
+    from pathlib import Path
+
+    directory = Path(__file__).resolve().parents[1] / "examples"
+    readme = (directory / "README.md").read_text()
+    on_disk = {p.name for p in directory.glob("*.py") if p.stem != "__init__"}
+
+    assert on_disk - set(re.findall(r"`([a-z_]+\.py)`", readme)) == set()
+
+
 def test_the_priorities_example_configures_both_axes() -> None:
     """Priorities are about kinds of work, shards about sources."""
     from examples import priorities

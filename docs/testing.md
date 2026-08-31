@@ -3,11 +3,6 @@
 A queue that is hard to test is a queue people work around, so these ship with
 the library rather than as an appendix.
 
-## Assert what was queued
-
-`CollectingEnqueuer` records what would have been enqueued and runs nothing —
-no worker, no Redis:
-
 The snippets on this page assume:
 
 ```python
@@ -21,6 +16,11 @@ handlers: dict[str, object] = {}
 async def handle_request() -> None:
     """Whatever your application does; it enqueues along the way."""
 ```
+
+## Assert what was queued
+
+`CollectingEnqueuer` records what would have been enqueued and runs nothing —
+no worker, no Redis:
 
 <!-- docs-test: skip -- asserts on the reader's own request handler -->
 ```python

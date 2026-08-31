@@ -1,12 +1,13 @@
 """Consuming somebody else's streams and owning no queue at all.
 
-Nothing is created in this namespace -- no queue stream, no consumer group on
-one -- and with no queues to prioritise, the foreign streams are the blocking
-read, so an entry is picked up as it is written rather than at the end of a
-`block_ms` window.
+Nothing is read but the foreign streams, and nothing is created in order to read
+them -- no queue stream to consume, no consumer group on one. With no queues to
+prioritise, the foreign streams are the blocking read, so an entry is picked up
+as it is written rather than at the end of a `block_ms` window.
 
-`queues=()` says what this deployment *reads*. `send_receipt` below is still
-enqueued as usual; those jobs are for whichever deployment consumes that queue.
+`queues=()` says what this deployment *reads*, not what it writes. `send_receipt`
+below is still enqueued as usual -- which does create that queue's stream here --
+and those jobs are for whichever deployment consumes it.
 """
 
 from __future__ import annotations

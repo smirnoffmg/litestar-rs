@@ -5,12 +5,10 @@ holding it moves due jobs from a ZSET into their streams. Losing the lease costs
 nothing — the next holder resumes from the same ZSET, and the promotion script
 makes a double pass a no-op.
 
-## Delayed jobs
-
 The snippets on this page assume:
 
 ```python
-from litestar_rs import CronJob, Envelope, RedisScheduler
+from litestar_rs import CronJob, Envelope
 from litestar_rs.plugin import QueueConfig, TaskRegistry
 
 tasks = TaskRegistry()
@@ -18,9 +16,9 @@ envelope = Envelope(id="job-1", task="reindex", payload=b"{}", enqueued_at=0)
 due_at_ms = 1_712_345_678_901
 ```
 
-```python
-from litestar_rs import RedisScheduler
+## Delayed jobs
 
+```python
 await scheduler.schedule_in(envelope, queue="default", delay_ms=60_000)
 await scheduler.schedule_at(envelope, queue="default", when_ms=due_at_ms)
 ```

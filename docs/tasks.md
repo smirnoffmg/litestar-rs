@@ -9,9 +9,7 @@ The snippets on this page assume:
 ```python
 from uuid import UUID
 
-from litestar.di import Provide
-
-from litestar_rs.plugin import QueueConfig, QueuePlugin, TaskRegistry
+from litestar_rs.plugin import TaskRegistry
 
 tasks = TaskRegistry()
 
