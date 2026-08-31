@@ -56,6 +56,12 @@ Issues = "https://github.com/smirnoffmg/smallage/issues"
 packages = ["src/smallage"]
 
 [dependency-groups]
+# Only the benchmarks need these, and only to measure something other than us.
+bench = [
+    "saq>=0.12",
+    "scalene>=1.5",
+    "testcontainers[redis]>=4.15.0",
+]
 dev = [
     "ruff",
     "mypy",

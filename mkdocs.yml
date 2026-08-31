@@ -53,6 +53,7 @@ plugins:
 nav:
   - Home: index.md
   - Design and invariants: design.md
+  - How this differs: comparison.md
   - Tasks: tasks.md
   - Scheduling: scheduling.md
   - Retries and the DLQ: retries.md
