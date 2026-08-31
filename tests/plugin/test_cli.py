@@ -35,8 +35,6 @@ def test_the_command_is_one_entrypoint_with_the_documented_options() -> None:
         "queues",
         "concurrency",
         "consumer",
-        "health_port",
-        "health_host",
     }
 
 
@@ -74,15 +72,6 @@ def test_the_plugin_is_found_on_an_app_that_registers_it() -> None:
     app = Litestar(route_handlers=[], plugins=[plugin])
 
     assert plugin_of(app) is plugin
-
-
-def test_the_health_endpoint_is_opt_in_and_configurable() -> None:
-    """A worker deployment has nothing to probe unless it is asked for."""
-    run = workers.commands["run"]
-    options = {option.name: option for option in run.params}
-
-    assert not options["health_port"].required
-    assert options["health_host"].default == "0.0.0.0"  # noqa: S104  # see the option
 
 
 def worker_app(

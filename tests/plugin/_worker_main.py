@@ -67,7 +67,6 @@ app = Litestar(
                 redis_url=REDIS_URL,
                 namespace=NAMESPACE,
                 block_ms=100,
-                health_path=None,
                 worker=WorkerConfig(
                     concurrency=1,
                     min_idle_ms=0,

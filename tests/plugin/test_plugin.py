@@ -9,7 +9,7 @@ from uuid import UUID, uuid4
 
 import anyio
 import pytest
-from litestar import Litestar, get, post
+from litestar import Litestar, Response, get, post
 from litestar.di import Provide
 from litestar.testing import AsyncTestClient
 from redis.asyncio import Redis
@@ -20,6 +20,7 @@ from litestar_rs.core.keys import stream_key
 from litestar_rs.core.testing import worker_running
 from litestar_rs.core.worker import WorkerConfig
 from litestar_rs.plugin.config import QueueConfig
+from litestar_rs.plugin.health import QueueHealth
 from litestar_rs.plugin.plugin import QueuePlugin
 from litestar_rs.plugin.registry import TaskRegistry
 
@@ -27,6 +28,7 @@ pytestmark = pytest.mark.integration
 
 RAN: list[tuple[UUID, str]] = []
 DONE = anyio.Event()
+PROBE = "/health/queue"
 
 
 def make_app(redis_url: str, namespace: str) -> tuple[Litestar, QueuePlugin]:
@@ -61,8 +63,16 @@ def make_app(redis_url: str, namespace: str) -> tuple[Litestar, QueuePlugin]:
         await reindex.enqueue(doc_id=DOC_ID)
         return "queued"
 
+    # The probe the documentation tells a deployment to write: its own path, its
+    # own status code, closing over the plugin. The plugin registers no route, so
+    # this is the only thing under test whenever a probe is asked below.
+    @get(PROBE)
+    async def health() -> Response[QueueHealth]:
+        report = await plugin.health()
+        return Response(report, status_code=200 if report.healthy else 503)
+
     app = Litestar(
-        route_handlers=[create],
+        route_handlers=[create, health],
         dependencies={"session": Provide(session)},
         plugins=[plugin],
     )
@@ -189,7 +199,7 @@ async def test_health_reports_the_group(redis_url: str, namespace: str) -> None:
     app, _ = make_app(redis_url, namespace)
 
     async with AsyncTestClient(app=app) as client:
-        response = await client.get("/health/queue")
+        response = await client.get(PROBE)
 
     assert response.status_code == 200
     body = response.json()
@@ -203,20 +213,32 @@ async def test_health_reports_the_group(redis_url: str, namespace: str) -> None:
     assert body["stats"]["unknown_task"] == 0
 
 
-def test_the_worker_serves_the_same_health_route(
+async def test_the_health_example_answers_on_both_of_its_paths(
     redis_url: str, namespace: str
 ) -> None:
-    """A readiness probe must ask a worker exactly what it asks a web process.
+    """The example is the documented way to serve a probe, so it has to work.
 
-    Structural on purpose: the body is already asserted through the web app, and
-    what could drift is the worker serving a lookalike route instead of this one.
+    A structural check would not have caught the handler this replaces, which
+    took the plugin as an argument and answered 400 to every request.
     """
-    app, plugin = make_app(redis_url, namespace)
-    worker_app = plugin.health_app()
+    from dataclasses import replace
 
-    served = {route.path for route in worker_app.routes}
-    assert served == {plugin.config.health_path}
-    assert plugin.config.health_path in {route.path for route in app.routes}
+    from examples import health_endpoint
+
+    plugin = next(p for p in health_endpoint.app.plugins if isinstance(p, QueuePlugin))
+    # The example reads REDIS_URL at import; point it at this suite's container
+    # the same way the worker command retargets a configuration.
+    plugin.config = replace(plugin.config, redis_url=redis_url, namespace=namespace)
+
+    async with AsyncTestClient(app=health_endpoint.app) as client:
+        probe = await client.get("/health/queue")
+        ready = await client.get("/readyz")
+
+    assert probe.status_code == 200
+    assert probe.json()["namespace"] == namespace
+    assert ready.status_code == 200
+    assert ready.json()["queue"]["healthy"] is True
+    assert ready.json()["database"] is True
 
 
 def test_using_the_queue_before_it_opens_says_so(
@@ -321,50 +343,35 @@ async def test_the_cli_passes_the_worker_everything_it_takes(
     assert wired == accepted, f"the CLI never passes: {sorted(accepted - wired)}"
 
 
-def test_a_path_already_taken_fails_at_startup(redis_url: str, namespace: str) -> None:
-    """Loudly, rather than one handler quietly shadowing the other."""
-    from litestar.exceptions import ImproperlyConfiguredException
+def test_the_plugin_registers_no_routes_of_its_own(
+    redis_url: str, namespace: str
+) -> None:
+    """Where a probe lives, and whether it is public, is the application's call.
 
-    @get("/health/queue")
-    async def theirs() -> str:
-        return "theirs"
-
+    A plugin that added one would also be a plugin that could collide with a path
+    the application already uses, and fail its startup over a route it never
+    asked for.
+    """
     plugin = QueuePlugin(
         QueueConfig(registry=TaskRegistry(), redis_url=redis_url, namespace=namespace)
     )
 
-    with pytest.raises(ImproperlyConfiguredException, match="already registered"):
-        Litestar(route_handlers=[theirs], plugins=[plugin])
+    # Against a bare application rather than against nothing: Litestar serves its
+    # own OpenAPI routes, and what is under test is the difference the plugin
+    # makes.
+    bare = {route.path for route in Litestar(route_handlers=[]).routes}
+    with_plugin = {
+        route.path for route in Litestar(route_handlers=[], plugins=[plugin]).routes
+    }
 
-
-def test_turning_the_health_route_off_registers_nothing(
-    redis_url: str, namespace: str
-) -> None:
-    @get("/health/queue")
-    async def theirs() -> str:
-        return "theirs"
-
-    plugin = QueuePlugin(
-        QueueConfig(
-            registry=TaskRegistry(),
-            redis_url=redis_url,
-            namespace=namespace,
-            health_path=None,
-        )
-    )
-
-    app = Litestar(route_handlers=[theirs], plugins=[plugin])
-
-    assert "/health/queue" in {route.path for route in app.routes}
-    with pytest.raises(ConfigurationError, match="no health route"):
-        plugin.health_app()
+    assert with_plugin == bare
 
 
 async def test_the_probe_fails_when_the_queue_is_unhealthy(
     redis_url: str, namespace: str
 ) -> None:
     """A readiness probe reads the status code; 200 while unhealthy never fails."""
-    app, plugin = make_app(redis_url, namespace)
+    app, _ = make_app(redis_url, namespace)
     stream = stream_key(namespace, "default", 0)
 
     # A client of this test's own, because the app's belong to the test client's
@@ -373,7 +380,7 @@ async def test_the_probe_fails_when_the_queue_is_unhealthy(
     try:
         await setup.xgroup_create(stream, "workers", id="0", mkstream=True)
         async with AsyncTestClient(app=app) as client:
-            healthy = await client.get(plugin.config.health_path or "")
+            healthy = await client.get(PROBE)
             assert healthy.status_code == 200
             assert healthy.json()["healthy"] is True
 
@@ -382,7 +389,7 @@ async def test_the_probe_fails_when_the_queue_is_unhealthy(
         await setup.xdel(stream, entries[1])
 
         async with AsyncTestClient(app=app) as client:
-            unhealthy = await client.get(plugin.config.health_path or "")
+            unhealthy = await client.get(PROBE)
     finally:
         await setup.aclose()
 

@@ -8,7 +8,6 @@ an import-ordering problem the CLI has already solved.
 from __future__ import annotations
 
 from dataclasses import replace
-from functools import partial
 from typing import TYPE_CHECKING, Any
 
 import anyio
@@ -36,21 +35,6 @@ def worker_arguments(plugin: QueuePlugin, config: QueueConfig) -> dict[str, Any]
         "stats": plugin.stats,
         "cron": config.cron,
     }
-
-
-async def serve_health(plugin: QueuePlugin, host: str, port: int) -> None:
-    """Run the plugin's own health route beside the worker."""
-    try:
-        import uvicorn
-    except ImportError as exc:  # pragma: no cover - depends on the install
-        raise click.ClickException(
-            "--health-port needs a server; install litestar[standard]"
-        ) from exc
-
-    server = uvicorn.Server(
-        uvicorn.Config(plugin.health_app(), host=host, port=port, log_level="warning")
-    )
-    await server.serve()
 
 
 def with_overrides(
@@ -88,21 +72,12 @@ def plugin_of(app: Litestar) -> QueuePlugin:
 )
 @click.option("--concurrency", type=int, help="Jobs to run at once.")
 @click.option("--consumer", help="Consumer name; must be unique per running worker.")
-@click.option("--health-port", type=int, help="Serve the health endpoint here.")
-@click.option(
-    "--health-host",
-    default="0.0.0.0",  # noqa: S104  # a probe reaches a container from outside it
-    show_default=True,
-    help="Interface for the health endpoint.",
-)
 @click.pass_obj
 def run_workers(
     env: object,
     queues: tuple[str, ...],
     concurrency: int | None,
     consumer: str | None,
-    health_port: int | None,
-    health_host: str,
 ) -> None:
     """Consume tasks until interrupted."""
     app: Litestar = env.app  # type: ignore[attr-defined]  # LitestarEnv carries it
@@ -117,15 +92,12 @@ def run_workers(
         # the queue through the plugin, so entering it and connecting as well
         # would leave a worker holding two sets of connections.
         opened = app.lifespan() if config.run_app_lifespan else plugin.connected()
-        async with opened, anyio.create_task_group() as tg:
-            if health_port is not None:
-                tg.start_soon(partial(serve_health, plugin, health_host, health_port))
+        async with opened:
             await run_with_signals(
                 plugin.transport,
                 config.registry.handlers(),
                 config.worker,
                 **worker_arguments(plugin, config),
             )
-            tg.cancel_scope.cancel()
 
     anyio.run(main, backend="asyncio", backend_options={"use_uvloop": True})

@@ -7,10 +7,9 @@ from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
-from litestar import Litestar, Response, get
+from litestar import Litestar
 from litestar.di import Provide
 from litestar.plugins import CLIPlugin, InitPlugin
-from litestar.status_codes import HTTP_200_OK, HTTP_503_SERVICE_UNAVAILABLE
 from redis.asyncio import Redis
 
 from litestar_rs.core.envelope import Envelope, TaskResult
@@ -94,8 +93,6 @@ class QueuePlugin(InitPlugin, CLIPlugin):
         # application opens after it can enqueue, and can still enqueue while
         # unwinding. Appended, it would close before their exits ran.
         app_config.lifespan.insert(0, self._lifespan)
-        if self.config.health_path is not None:
-            app_config.route_handlers.append(self._health_route())
         return app_config
 
     def on_cli_init(self, cli: Group) -> None:
@@ -158,37 +155,17 @@ class QueuePlugin(InitPlugin, CLIPlugin):
             await reader.aclose()
             await control.aclose()
 
-    def health_app(self) -> Litestar:
-        """A tiny application serving nothing but the health route.
+    async def health(self) -> QueueHealth:
+        """Everything a readiness probe needs, for whoever is serving one.
 
-        The worker serves this one so that a readiness probe against a worker
-        deployment asks exactly the question it asks a web one, computed by the
-        same function rather than a lookalike.
+        The plugin registers no route of its own: which path a probe lives on,
+        whether it is public, and what else belongs in the same response are the
+        application's to decide, and a worker has no server to answer on at all.
+        `QueueHealth.healthy` is the field to turn into a status code -- a probe
+        reads the code, not the body, and answering 200 while unhealthy is a
+        probe that can never fail.
         """
-        if self.config.health_path is None:
-            raise ConfigurationError(
-                "health_path is None, so there is no health route to serve; "
-                "set one to use --health-port"
-            )
-        # No OpenAPI: a worker serves one route for a probe, not an API surface.
-        return Litestar(route_handlers=[self._health_route()], openapi_config=None)
-
-    def _health_route(self) -> Any:
-        plugin = self
-
-        @get(self.config.health_path or "/health/queue")
-        async def health() -> Response[QueueHealth]:
-            report = await queue_health(plugin.transport, plugin.stats)
-            # A readiness probe reads the status code, not the body. Answering
-            # 200 while unhealthy is a probe that can never fail.
-            return Response(
-                report,
-                status_code=HTTP_200_OK
-                if report.healthy
-                else HTTP_503_SERVICE_UNAVAILABLE,
-            )
-
-        return health
+        return await queue_health(self.transport, self.stats)
 
 
 def _consumer_name(config: QueueConfig, override: str | None) -> str:

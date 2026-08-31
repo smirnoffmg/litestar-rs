@@ -83,7 +83,7 @@ or a client. There is no context dictionary.
 A worker is the same application, started differently:
 
 ```bash
-litestar workers run --queue high --concurrency 20 --health-port 8081
+litestar workers run --queue high --concurrency 20
 ```
 
 The lifecycle comes with it: a worker enters the application's lifespan, so
