@@ -2,19 +2,19 @@
 
 import pytest
 
-import litestar_rs
-from litestar_rs import core
+import smallage
+from smallage import core
 
 pytestmark = pytest.mark.unit
 
 
 def test_every_exported_name_resolves() -> None:
-    for name in litestar_rs.__all__:
-        assert getattr(litestar_rs, name) is not None
+    for name in smallage.__all__:
+        assert getattr(smallage, name) is not None
 
 
 def test_top_level_is_a_subset_of_the_core_surface() -> None:
-    exported = set(litestar_rs.__all__) - {"__version__"}
+    exported = set(smallage.__all__) - {"__version__"}
     assert exported <= set(core.__all__)
 
 
@@ -27,4 +27,4 @@ def test_version_matches_the_one_place_it_is_declared() -> None:
     with pyproject.open("rb") as handle:
         declared = tomllib.load(handle)["project"]["version"]
 
-    assert litestar_rs.__version__ == declared
+    assert smallage.__version__ == declared

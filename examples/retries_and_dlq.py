@@ -17,12 +17,12 @@ from uuid import UUID
 
 import anyio
 import msgspec.structs
-from litestar import Litestar, post
 from litestar.params import FromPath
 from redis.asyncio import Redis
 
-from litestar_rs import RetryPolicy, WorkerConfig, dlq_key, from_fields
-from litestar_rs.plugin import QueueConfig, QueuePlugin, TaskRegistry
+from litestar import Litestar, post
+from smallage import RetryPolicy, WorkerConfig, dlq_key, from_fields
+from smallage.litestar import QueueConfig, QueuePlugin, TaskRegistry
 
 REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
 NAMESPACE = "example-retries"

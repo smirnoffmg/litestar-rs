@@ -10,12 +10,12 @@ from typing import Any
 import anyio
 import pytest
 
-from litestar_rs.core.envelope import Envelope
-from litestar_rs.core.retry import RetryPolicy
-from litestar_rs.core.scheduler import RedisScheduler
-from litestar_rs.core.testing import worker_running
-from litestar_rs.core.transport import RedisStreamsTransport
-from litestar_rs.core.worker import WorkerConfig, run
+from smallage.core.envelope import Envelope
+from smallage.core.retry import RetryPolicy
+from smallage.core.scheduler import RedisScheduler
+from smallage.core.testing import worker_running
+from smallage.core.transport import RedisStreamsTransport
+from smallage.core.worker import WorkerConfig, run
 
 pytestmark = pytest.mark.integration
 

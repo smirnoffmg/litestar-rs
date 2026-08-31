@@ -2,8 +2,8 @@
 
 import pytest
 
-from litestar_rs.core.envelope import Envelope
-from litestar_rs.core.testing import CollectingEnqueuer, EagerEnqueuer, UnknownTask
+from smallage.core.envelope import Envelope
+from smallage.core.testing import CollectingEnqueuer, EagerEnqueuer, UnknownTask
 
 pytestmark = pytest.mark.unit
 

@@ -18,8 +18,8 @@ import anyio
 import pytest
 from litestar.di import Provide
 
-from litestar_rs import CollectingEnqueuer, EagerEnqueuer
-from litestar_rs.plugin import TaskRegistry
+from smallage import CollectingEnqueuer, EagerEnqueuer
+from smallage.litestar import TaskRegistry
 
 REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
 
@@ -86,8 +86,8 @@ async def test_a_real_worker_runs_it() -> None:
     Leaving the block asks the worker to drain, so in-flight work finishes
     instead of vanishing mid-assertion.
     """
-    from litestar_rs import worker_running
-    from litestar_rs.plugin import QueueConfig, QueuePlugin
+    from smallage import worker_running
+    from smallage.litestar import QueueConfig, QueuePlugin
 
     global DONE
     INDEXED.clear()

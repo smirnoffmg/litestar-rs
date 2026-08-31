@@ -13,9 +13,9 @@ import anyio
 import pytest
 from redis.asyncio import Redis
 
-from litestar_rs.core.envelope import Envelope, from_fields
-from litestar_rs.core.scheduler import RedisScheduler
-from litestar_rs.core.transport import RedisStreamsTransport
+from smallage.core.envelope import Envelope, from_fields
+from smallage.core.scheduler import RedisScheduler
+from smallage.core.transport import RedisStreamsTransport
 from tests.core.integration.topologies import (
     MASTER_NAME,
     SENTINEL_PORT,
@@ -161,8 +161,8 @@ async def test_a_worker_survives_a_sentinel_failover_with_work_in_flight(
     blocking read. It must notice, reconnect and carry on -- the alternative is
     a process that looks healthy to its probes and does nothing.
     """
-    from litestar_rs.core.testing import worker_running
-    from litestar_rs.core.worker import WorkerConfig
+    from smallage.core.testing import worker_running
+    from smallage.core.worker import WorkerConfig
 
     topology = sentinel
     watcher = new_sentinel()
@@ -237,8 +237,8 @@ async def test_a_worker_follows_a_slot_that_moves_under_it(cluster: Topology) ->
     """
     from redis.crc import key_slot
 
-    from litestar_rs.core.testing import worker_running
-    from litestar_rs.core.worker import WorkerConfig
+    from smallage.core.testing import worker_running
+    from smallage.core.worker import WorkerConfig
 
     assert cluster.container is not None
     namespace = f"t{uuid4().hex[:8]}"

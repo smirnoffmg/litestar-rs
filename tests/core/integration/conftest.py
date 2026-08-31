@@ -8,8 +8,8 @@ import pytest
 from redis.asyncio import Redis
 from testcontainers.community.redis import RedisContainer
 
-from litestar_rs.core.scheduler import RedisScheduler
-from litestar_rs.core.transport import RedisStreamsTransport
+from smallage.core.scheduler import RedisScheduler
+from smallage.core.transport import RedisStreamsTransport
 
 # Lowest version we support: XINFO GROUPS reports `lag` from Redis 7 on. CI runs
 # the suite against each supported major by setting REDIS_IMAGE.

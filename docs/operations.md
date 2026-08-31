@@ -60,7 +60,7 @@ async def run_the_scheduler(app: Litestar) -> AsyncGenerator[None]:
 web-only in its entirety:
 
 ```python
-from litestar_rs.plugin import QueueConfig, TaskRegistry
+from smallage.litestar import QueueConfig, TaskRegistry
 
 QueueConfig(registry=TaskRegistry(), run_app_lifespan=False)
 ```
@@ -89,7 +89,7 @@ be an odd plugin that could fail your startup over a path it added itself.
 ```python
 from litestar import Litestar, Response, get
 
-from litestar_rs.plugin import QueueConfig, QueueHealth, QueuePlugin, TaskRegistry
+from smallage.litestar import QueueConfig, QueueHealth, QueuePlugin, TaskRegistry
 
 queue = QueuePlugin(QueueConfig(registry=TaskRegistry()))
 

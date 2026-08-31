@@ -15,10 +15,10 @@ import time
 from uuid import UUID
 
 import anyio
-from litestar import Litestar, post
 from litestar.params import FromPath
 
-from litestar_rs.plugin import QueueConfig, QueuePlugin, TaskRegistry
+from litestar import Litestar, post
+from smallage.litestar import QueueConfig, QueuePlugin, TaskRegistry
 
 REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
 

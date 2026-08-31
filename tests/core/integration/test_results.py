@@ -6,9 +6,9 @@ import anyio
 import pytest
 from redis.asyncio import Redis
 
-from litestar_rs.core.envelope import TaskResult
-from litestar_rs.core.errors import ConfigurationError
-from litestar_rs.core.results import RedisResultStore
+from smallage.core.envelope import TaskResult
+from smallage.core.errors import ConfigurationError
+from smallage.core.results import RedisResultStore
 
 pytestmark = pytest.mark.integration
 

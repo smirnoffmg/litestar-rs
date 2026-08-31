@@ -2,14 +2,14 @@
 
 ## Core
 
-::: litestar_rs.core
+::: smallage.core
     options:
       show_root_heading: true
       members: true
 
 ## Litestar plugin
 
-::: litestar_rs.plugin
+::: smallage.litestar
     options:
       show_root_heading: true
       members: true

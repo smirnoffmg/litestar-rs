@@ -2,14 +2,14 @@
 
 import pytest
 
-from litestar_rs.core.envelope import (
+from smallage.core.envelope import (
     ENVELOPE_VERSION,
     Envelope,
     JsonCodec,
     from_fields,
     to_fields,
 )
-from litestar_rs.core.errors import MalformedEnvelope
+from smallage.core.errors import MalformedEnvelope
 
 pytestmark = pytest.mark.unit
 

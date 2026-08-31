@@ -17,9 +17,12 @@ exactly-once is a design error in the application, not a bug here.
 
 Two layers, hard-separated:
 
-- **core** — transport, worker, scheduler. Depends on `redis`, `msgspec`,
-  `anyio`. **Importing Litestar here is forbidden.**
-- **plugin** — DI, CLI, serialization, health. Imports core.
+- **`smallage.core`** — transport, worker, scheduler. Depends on `redis`,
+  `msgspec`, `anyio`. **Importing Litestar here is forbidden.**
+- **`smallage.litestar`** — DI, CLI, serialization, health. Imports core.
+
+The second is named for the framework it plugs into, which leaves room for a
+layer named after another one. There is no such layer today.
 
 Core must be usable without Litestar.
 

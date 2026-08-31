@@ -5,7 +5,7 @@ The snippets on this page assume:
 ```python
 from uuid import UUID
 
-from litestar_rs.plugin import QueueConfig, TaskRegistry
+from smallage.litestar import QueueConfig, TaskRegistry
 
 tasks = TaskRegistry()
 ```

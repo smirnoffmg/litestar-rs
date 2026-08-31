@@ -8,8 +8,8 @@ makes a double pass a no-op.
 The snippets on this page assume:
 
 ```python
-from litestar_rs import CronJob, Envelope
-from litestar_rs.plugin import QueueConfig, TaskRegistry
+from smallage import CronJob, Envelope
+from smallage.litestar import QueueConfig, TaskRegistry
 
 tasks = TaskRegistry()
 envelope = Envelope(id="job-1", task="reindex", payload=b"{}", enqueued_at=0)
@@ -42,7 +42,7 @@ CronJob(name="trim", expression="0 3 * * *", task="trim",
 A task taking no arguments needs nothing: the default is an empty object.
 
 ```python
-from litestar_rs import CronJob
+from smallage import CronJob
 
 nightly = CronJob(
     name="nightly-reindex",

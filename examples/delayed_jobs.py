@@ -12,11 +12,11 @@ from __future__ import annotations
 import os
 from uuid import UUID
 
-from litestar import Litestar, post
 from litestar.params import FromPath
 
-from litestar_rs import Envelope, JsonCodec
-from litestar_rs.plugin import QueueConfig, QueuePlugin, TaskRegistry
+from litestar import Litestar, post
+from smallage import Envelope, JsonCodec
+from smallage.litestar import QueueConfig, QueuePlugin, TaskRegistry
 
 REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
 

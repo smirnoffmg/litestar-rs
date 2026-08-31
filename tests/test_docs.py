@@ -21,7 +21,7 @@ pytestmark = pytest.mark.unit
 
 ROOT = Path(__file__).resolve().parent.parent
 PAGES = [*sorted((ROOT / "docs").glob("*.md")), ROOT / "README.md"]
-IMPORT = re.compile(r"^\s*from (litestar_rs[\w.]*) import (.+)$")
+IMPORT = re.compile(r"^\s*from (smallage[\w.]*) import (.+)$")
 
 
 def documented_imports() -> list[tuple[str, str, str]]:

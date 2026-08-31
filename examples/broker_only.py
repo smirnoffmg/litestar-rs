@@ -15,9 +15,8 @@ from __future__ import annotations
 import os
 
 from litestar import Litestar
-
-from litestar_rs import Record
-from litestar_rs.plugin import QueueConfig, QueuePlugin, TaskRegistry
+from smallage import Record
+from smallage.litestar import QueueConfig, QueuePlugin, TaskRegistry
 
 REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
 

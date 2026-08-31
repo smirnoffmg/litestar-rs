@@ -11,8 +11,8 @@ from typing import Any
 import anyio
 import pytest
 
-from litestar_rs.core.envelope import Envelope, from_fields
-from litestar_rs.core.transport import RedisStreamsTransport
+from smallage.core.envelope import Envelope, from_fields
+from smallage.core.transport import RedisStreamsTransport
 
 pytestmark = pytest.mark.integration
 
@@ -232,7 +232,7 @@ async def test_external_streams_share_the_group_and_the_worker(
     """Both modes on one consumer group and one process is the whole point."""
     from redis.asyncio import Redis
 
-    from litestar_rs.core.transport import RedisStreamsTransport
+    from smallage.core.transport import RedisStreamsTransport
 
     reader: Redis = Redis.from_url(redis_url, socket_timeout=30.0)
     control: Redis = Redis.from_url(redis_url)

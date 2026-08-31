@@ -1,7 +1,7 @@
-# litestar-rs
+# smallage
 
-A distributed task queue on Redis Streams, with first-class Litestar
-integration.
+Background tasks, cron and a dead letter queue on Redis Streams, with a Litestar
+integration. *Smallage is the old name for wild celery.*
 
 **Delivery is at-least-once.** Handlers must be idempotent; a `dedup` key is
 provided for the cases where that is not naturally true. Treating delivery as
@@ -10,14 +10,15 @@ exactly-once is a design error in the application, not a bug here.
 ## Install
 
 ```bash
-uv add litestar-rs
+uv add smallage
 ```
 
 The core — transport, worker, scheduler — never imports Litestar, and an
-import-linter contract keeps it that way, so `litestar_rs.core` is usable behind
+import-linter contract keeps it that way, so `smallage.core` is usable behind
 another framework or none. That is a rule about imports rather than about
-installation: Litestar is an ordinary dependency here, because a package called
-litestar-rs that made it optional would only be surprising.
+installation: Litestar is an ordinary dependency, because the Litestar layer is
+half of what this package is for and an extra would stand in the way of nearly
+everyone installing it. Nothing obliges you to import that half.
 
 ## Quickstart
 
@@ -28,7 +29,7 @@ from uuid import UUID, uuid4
 from litestar import Litestar, post
 from litestar.di import Provide
 
-from litestar_rs.plugin import QueueConfig, QueuePlugin, TaskRegistry
+from smallage.litestar import QueueConfig, QueuePlugin, TaskRegistry
 
 tasks = TaskRegistry()
 
@@ -68,10 +69,10 @@ litestar workers run --queue high --concurrency 20
 
 ## Two layers
 
-- **`litestar_rs.core`** — transport, worker, scheduler, retries, results.
+- **`smallage.core`** — transport, worker, scheduler, retries, results.
   Depends on `redis`, `msgspec`, `anyio`. Importing Litestar from here is
   forbidden, and an import-linter contract enforces it.
-- **`litestar_rs.plugin`** — dependency injection, CLI, serialization, health,
+- **`smallage.litestar`** — dependency injection, CLI, serialization, health,
   tracing.
 
 ## Guides

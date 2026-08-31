@@ -2,9 +2,9 @@
 
 import pytest
 
-from litestar_rs.core.deferred import DeferredEnqueuer
-from litestar_rs.core.envelope import Envelope
-from litestar_rs.core.testing import CollectingEnqueuer
+from smallage.core.deferred import DeferredEnqueuer
+from smallage.core.envelope import Envelope
+from smallage.core.testing import CollectingEnqueuer
 
 pytestmark = pytest.mark.unit
 
@@ -70,7 +70,7 @@ async def test_a_failed_flush_does_not_republish_on_the_next_one() -> None:
 
 async def test_a_bound_enqueuer_is_only_in_force_inside_its_block() -> None:
     """A unit of work must not leak its buffer into the next request."""
-    from litestar_rs.core.deferred import current_enqueuer
+    from smallage.core.deferred import current_enqueuer
 
     target = CollectingEnqueuer()
     deferred = DeferredEnqueuer(target)

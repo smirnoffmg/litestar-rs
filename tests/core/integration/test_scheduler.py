@@ -8,11 +8,11 @@ from collections.abc import Awaitable, Callable
 import anyio
 import pytest
 
-from litestar_rs.core.cron import CronJob, occurrence_envelope, occurrence_id
-from litestar_rs.core.envelope import Envelope, from_fields
-from litestar_rs.core.keys import sched_job_key, stream_key
-from litestar_rs.core.scheduler import RedisScheduler
-from litestar_rs.core.transport import RedisStreamsTransport
+from smallage.core.cron import CronJob, occurrence_envelope, occurrence_id
+from smallage.core.envelope import Envelope, from_fields
+from smallage.core.keys import sched_job_key, stream_key
+from smallage.core.scheduler import RedisScheduler
+from smallage.core.transport import RedisStreamsTransport
 
 pytestmark = pytest.mark.integration
 

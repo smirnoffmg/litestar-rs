@@ -1,16 +1,20 @@
-# litestar-rs
+# smallage
 
-[![PyPI version](https://img.shields.io/pypi/v/litestar-rs)](https://pypi.org/project/litestar-rs/)
-[![Python versions](https://img.shields.io/pypi/pyversions/litestar-rs)](https://pypi.org/project/litestar-rs/)
-[![License](https://img.shields.io/pypi/l/litestar-rs)](https://pypi.org/project/litestar-rs/)
-[![CI](https://img.shields.io/github/actions/workflow/status/smirnoffmg/litestar-rs/ci.yml?branch=main)](https://github.com/smirnoffmg/litestar-rs/actions/workflows/ci.yml)
+[![PyPI version](https://img.shields.io/pypi/v/smallage)](https://pypi.org/project/smallage/)
+[![Python versions](https://img.shields.io/pypi/pyversions/smallage)](https://pypi.org/project/smallage/)
+[![License](https://img.shields.io/pypi/l/smallage)](https://pypi.org/project/smallage/)
+[![CI](https://img.shields.io/github/actions/workflow/status/smirnoffmg/smallage/ci.yml?branch=main)](https://github.com/smirnoffmg/smallage/actions/workflows/ci.yml)
 [![Checked with mypy](https://img.shields.io/badge/mypy-strict-2a6db2)](https://mypy-lang.org/)
 
-Distributed task queue on Redis Streams for [Litestar](https://litestar.dev/) —
-typed tasks, real dependency injection, retries, scheduling and cron, through
-Litestar's native plugin protocol.
+Background tasks, cron and a dead letter queue on Redis Streams — typed tasks,
+retries with backoff, delayed jobs, and consumption of streams somebody else
+writes. The core reaches for no web framework; the
+[Litestar](https://litestar.dev/) layer adds real dependency injection and a CLI
+through the native plugin protocol.
 
-📖 **[Documentation](https://smirnoffmg.dev/litestar-rs/)**
+*Smallage is the old name for wild celery.*
+
+📖 **[Documentation](https://smirnoffmg.dev/smallage/)**
 
 ## Features
 
@@ -27,7 +31,7 @@ Litestar's native plugin protocol.
 ## Installation
 
 ```bash
-uv add litestar-rs
+uv add smallage
 ```
 
 Redis 7 or newer. Standalone, Sentinel and Cluster are all covered by the test
@@ -42,7 +46,7 @@ from uuid import UUID, uuid4
 from litestar import Litestar, post
 from litestar.di import Provide
 
-from litestar_rs.plugin import QueueConfig, QueuePlugin, TaskRegistry
+from smallage.litestar import QueueConfig, QueuePlugin, TaskRegistry
 
 tasks = TaskRegistry()
 
@@ -107,9 +111,9 @@ cases where that is not naturally true.
 
 Tasks, scheduling, retries, priorities, broker mode, results, testing and
 operations are covered in the
-**[full documentation](https://smirnoffmg.dev/litestar-rs/)**. The rules the
+**[full documentation](https://smirnoffmg.dev/smallage/)**. The rules the
 library is built to are in
-**[Design and invariants](https://smirnoffmg.dev/litestar-rs/design/)**.
+**[Design and invariants](https://smirnoffmg.dev/smallage/design/)**.
 Runnable [examples](examples/) are included.
 
 ## Development

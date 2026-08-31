@@ -12,11 +12,11 @@ from typing import Any
 import anyio
 import pytest
 
-from litestar_rs.core.envelope import Envelope
-from litestar_rs.core.scheduler import RedisScheduler
-from litestar_rs.core.testing import worker_running
-from litestar_rs.core.transport import RedisStreamsTransport
-from litestar_rs.core.worker import WorkerConfig
+from smallage.core.envelope import Envelope
+from smallage.core.scheduler import RedisScheduler
+from smallage.core.testing import worker_running
+from smallage.core.transport import RedisStreamsTransport
+from smallage.core.worker import WorkerConfig
 
 pytestmark = [pytest.mark.integration, pytest.mark.slow]
 

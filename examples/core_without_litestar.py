@@ -15,7 +15,7 @@ import os
 import anyio
 from redis.asyncio import Redis
 
-from litestar_rs import (
+from smallage import (
     Envelope,
     JsonCodec,
     RedisScheduler,

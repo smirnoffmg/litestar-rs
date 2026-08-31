@@ -544,59 +544,6 @@ wheels = [
 ]
 
 [[package]]
-name = "litestar-rs"
-version = "0.2.0"
-source = { editable = "." }
-dependencies = [
-    { name = "anyio" },
-    { name = "cronsim" },
-    { name = "litestar" },
-    { name = "msgspec" },
-    { name = "redis", extra = ["hiredis"] },
-    { name = "uvloop" },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "import-linter" },
-    { name = "litestar" },
-    { name = "mkdocs" },
-    { name = "mkdocs-material" },
-    { name = "mkdocstrings", extra = ["python"] },
-    { name = "mypy" },
-    { name = "pre-commit" },
-    { name = "pytest" },
-    { name = "pytest-cov" },
-    { name = "ruff" },
-    { name = "testcontainers", extra = ["redis"] },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "anyio", specifier = ">=4.2" },
-    { name = "cronsim", specifier = ">=2.7" },
-    { name = "litestar", specifier = ">=2.0" },
-    { name = "msgspec", specifier = ">=0.18" },
-    { name = "redis", extras = ["hiredis"], specifier = ">=5.0" },
-    { name = "uvloop", specifier = ">=0.21" },
-]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "import-linter" },
-    { name = "litestar", specifier = ">=2.0" },
-    { name = "mkdocs" },
-    { name = "mkdocs-material" },
-    { name = "mkdocstrings", extras = ["python"] },
-    { name = "mypy" },
-    { name = "pre-commit" },
-    { name = "pytest" },
-    { name = "pytest-cov" },
-    { name = "ruff" },
-    { name = "testcontainers", extras = ["redis"], specifier = ">=4.15.0" },
-]
-
-[[package]]
 name = "markdown"
 version = "3.10.2"
 source = { registry = "https://pypi.org/simple" }
@@ -1285,6 +1232,59 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/94/e7/b2c673351809dca68a0e064b6af791aa332cf192da575fd474ed7d6f16a2/six-1.17.0.tar.gz", hash = "sha256:ff70335d468e7eb6ec65b95b99d3a2836546063f63acc5171de367e834932a81", size = 34031, upload-time = "2024-12-04T17:35:28.174Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/b7/ce/149a00dd41f10bc29e5921b496af8b574d8413afcd5e30dfa0ed46c2cc5e/six-1.17.0-py2.py3-none-any.whl", hash = "sha256:4721f391ed90541fddacab5acf947aa0d3dc7d27b2e1e8eda2be8970586c3274", size = 11050, upload-time = "2024-12-04T17:35:26.475Z" },
+]
+
+[[package]]
+name = "smallage"
+version = "0.2.0"
+source = { editable = "." }
+dependencies = [
+    { name = "anyio" },
+    { name = "cronsim" },
+    { name = "litestar" },
+    { name = "msgspec" },
+    { name = "redis", extra = ["hiredis"] },
+    { name = "uvloop" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "import-linter" },
+    { name = "litestar" },
+    { name = "mkdocs" },
+    { name = "mkdocs-material" },
+    { name = "mkdocstrings", extra = ["python"] },
+    { name = "mypy" },
+    { name = "pre-commit" },
+    { name = "pytest" },
+    { name = "pytest-cov" },
+    { name = "ruff" },
+    { name = "testcontainers", extra = ["redis"] },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "anyio", specifier = ">=4.2" },
+    { name = "cronsim", specifier = ">=2.7" },
+    { name = "litestar", specifier = ">=2.0" },
+    { name = "msgspec", specifier = ">=0.18" },
+    { name = "redis", extras = ["hiredis"], specifier = ">=5.0" },
+    { name = "uvloop", specifier = ">=0.21" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "import-linter" },
+    { name = "litestar", specifier = ">=2.0" },
+    { name = "mkdocs" },
+    { name = "mkdocs-material" },
+    { name = "mkdocstrings", extras = ["python"] },
+    { name = "mypy" },
+    { name = "pre-commit" },
+    { name = "pytest" },
+    { name = "pytest-cov" },
+    { name = "ruff" },
+    { name = "testcontainers", extras = ["redis"], specifier = ">=4.15.0" },
 ]
 
 [[package]]

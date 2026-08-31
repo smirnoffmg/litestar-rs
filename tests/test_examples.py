@@ -9,9 +9,9 @@ import re
 import warnings
 
 import pytest
-from litestar import Litestar
 
-from litestar_rs.plugin import QueuePlugin
+from litestar import Litestar
+from smallage.litestar import QueuePlugin
 
 pytestmark = pytest.mark.unit
 
@@ -89,7 +89,7 @@ def test_the_health_example_serves_routes_of_its_own() -> None:
     """The plugin adds none, so every route here is one the example wrote.
 
     That the handlers actually answer is asserted against a real Redis, in
-    `tests/plugin/test_plugin.py` -- this file has none.
+    `tests/litestar/test_plugin.py` -- this file has none.
     """
     from examples import health_endpoint
 
@@ -112,7 +112,7 @@ def test_the_core_example_reaches_for_no_web_framework() -> None:
         Path(__file__).resolve().parents[1] / "examples" / "core_without_litestar.py"
     ).read_text()
 
-    assert "litestar_rs" in source
+    assert "smallage" in source
     assert not re.search(r"^(from|import) litestar[^_]", source, re.M)
 
 

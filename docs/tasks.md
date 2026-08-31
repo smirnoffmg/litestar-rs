@@ -9,7 +9,7 @@ The snippets on this page assume:
 ```python
 from uuid import UUID
 
-from litestar_rs.plugin import TaskRegistry
+from smallage.litestar import TaskRegistry
 
 tasks = TaskRegistry()
 
@@ -122,7 +122,7 @@ Above `QueueConfig.offload_over_bytes` the encoded payload goes to a
 
 <!-- docs-test: skip -- creates the directory it is given -->
 ```python
-from litestar_rs import FilePayloadStore
+from smallage import FilePayloadStore
 
 payloads = FilePayloadStore("/mnt/queue-payloads")
 ```
@@ -163,7 +163,7 @@ rollback leaves a job that has already run. `DeferredEnqueuer` buffers the jobs
 and publishes them from a commit hook:
 
 ```python
-from litestar_rs import DeferredEnqueuer
+from smallage import DeferredEnqueuer
 
 deferred = DeferredEnqueuer(plugin)
 # in the handler: enqueue through `deferred`

@@ -11,10 +11,10 @@ from functools import partial
 import anyio
 from redis.asyncio import Redis
 
-from litestar_rs.core.envelope import Envelope
-from litestar_rs.core.scheduler import RedisScheduler
-from litestar_rs.core.transport import RedisStreamsTransport
-from litestar_rs.core.worker import WorkerConfig, run_with_signals
+from smallage.core.envelope import Envelope
+from smallage.core.scheduler import RedisScheduler
+from smallage.core.transport import RedisStreamsTransport
+from smallage.core.worker import WorkerConfig, run_with_signals
 
 
 async def main(

@@ -2,8 +2,8 @@
 
 import pytest
 
-from litestar_rs.core.envelope import Record
-from litestar_rs.core.scripts import SCRIPT_NAMES, load_script, parse_xclaim_reply
+from smallage.core.envelope import Record
+from smallage.core.scripts import SCRIPT_NAMES, load_script, parse_xclaim_reply
 
 pytestmark = pytest.mark.unit
 

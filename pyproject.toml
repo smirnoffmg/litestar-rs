@@ -3,15 +3,27 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "litestar-rs"
+name = "smallage"
 version = "0.2.0"
-description = "Distributed task queue on Redis Streams with first-class Litestar integration"
+description = "Background tasks, cron and a dead letter queue on Redis Streams, with a Litestar integration"
 readme = "README.md"
 requires-python = ">=3.13"
 license = "MIT"
 license-files = ["LICENSE"]
 authors = [{ name = "Maksim Smirnov" }]
-keywords = ["litestar", "redis", "redis-streams", "task-queue", "worker", "cron"]
+keywords = [
+    "redis",
+    "redis-streams",
+    "streams",
+    "task-queue",
+    "background-tasks",
+    "cron",
+    "dlq",
+    "dead-letter-queue",
+    "celery",
+    "faststream",
+    "litestar",
+]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Framework :: AnyIO",
@@ -27,21 +39,21 @@ dependencies = [
     "anyio>=4.2",
     "uvloop>=0.21",
     "cronsim>=2.7",
-    # A plain dependency, not an extra. "core works without Litestar" is a rule
-    # about imports -- checked by the import-linter contract below -- not about
-    # what gets installed, and nobody adds a package called litestar-rs in order
-    # to avoid Litestar.
+    # A plain dependency rather than an extra: the Litestar layer is half of
+    # what this package is for, and an extra nearly everyone installs anyway
+    # only stands in the way. "core works without Litestar" is a rule about
+    # imports -- the contract below enforces it -- not about what gets installed.
     "litestar>=2.0",
 ]
 
 [project.urls]
-Homepage = "https://github.com/smirnoffmg/litestar-rs"
-Documentation = "https://smirnoffmg.dev/litestar-rs/"
-Source = "https://github.com/smirnoffmg/litestar-rs"
-Issues = "https://github.com/smirnoffmg/litestar-rs/issues"
+Homepage = "https://github.com/smirnoffmg/smallage"
+Documentation = "https://smirnoffmg.dev/smallage/"
+Source = "https://github.com/smirnoffmg/smallage"
+Issues = "https://github.com/smirnoffmg/smallage/issues"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/litestar_rs"]
+packages = ["src/smallage"]
 
 [dependency-groups]
 dev = [
@@ -76,7 +88,7 @@ ignore = []
 ban-relative-imports = "all"
 
 [tool.ruff.lint.isort]
-known-first-party = ["litestar_rs"]
+known-first-party = ["smallage"]
 
 [tool.mypy]
 python_version = "3.13"
@@ -108,7 +120,7 @@ markers = [
 ]
 
 [tool.coverage.run]
-source_pkgs = ["litestar_rs.core", "litestar_rs.plugin"]
+source_pkgs = ["smallage.core", "smallage.litestar"]
 branch = true
 
 [tool.coverage.report]
@@ -121,27 +133,27 @@ exclude_also = [
 ]
 
 [tool.importlinter]
-root_packages = ["litestar_rs", "tests"]
+root_packages = ["smallage", "tests"]
 include_external_packages = true
 
 [[tool.importlinter.contracts]]
 name = "Core is framework-free"
 type = "forbidden"
-source_modules = ["litestar_rs.core"]
-forbidden_modules = ["litestar", "click", "litestar_rs.plugin"]
+source_modules = ["smallage.core"]
+forbidden_modules = ["litestar", "click", "smallage.litestar"]
 
 # Payloads come back out of Redis; unpickling one is remote code execution the
 # moment Redis is compromised.
 [[tool.importlinter.contracts]]
 name = "Payloads are never unpickled"
 type = "forbidden"
-source_modules = ["litestar_rs"]
+source_modules = ["smallage"]
 forbidden_modules = ["pickle", "shelve", "dill", "cloudpickle"]
 
 [[tool.importlinter.contracts]]
-name = "Plugin sits above core"
+name = "The Litestar layer sits above core"
 type = "layers"
-layers = ["litestar_rs.plugin", "litestar_rs.core"]
+layers = ["smallage.litestar", "smallage.core"]
 
 [[tool.importlinter.contracts]]
 name = "Core tests are framework-free"
@@ -152,7 +164,7 @@ forbidden_modules = ["litestar", "click"]
 [[tool.importlinter.contracts]]
 name = "Core internal layering"
 type = "layers"
-containers = ["litestar_rs.core"]
+containers = ["smallage.core"]
 layers = [
     "testing",
     "worker : deferred",
@@ -168,8 +180,8 @@ layers = [
 name = "Subsystems meet only through protocols"
 type = "independence"
 modules = [
-    "litestar_rs.core.transport",
-    "litestar_rs.core.scheduler",
-    "litestar_rs.core.results",
-    "litestar_rs.core.payloads",
+    "smallage.core.transport",
+    "smallage.core.scheduler",
+    "smallage.core.results",
+    "smallage.core.payloads",
 ]

@@ -7,8 +7,8 @@ the design: one worker loop, not a second deployment.
 The snippets on this page assume:
 
 ```python
-from litestar_rs import Record
-from litestar_rs.plugin import QueueConfig, TaskRegistry
+from smallage import Record
+from smallage.litestar import QueueConfig, TaskRegistry
 
 tasks = TaskRegistry()
 

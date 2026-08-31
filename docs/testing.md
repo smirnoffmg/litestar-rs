@@ -6,7 +6,7 @@ the library rather than as an appendix.
 The snippets on this page assume:
 
 ```python
-from litestar_rs.plugin import TaskRegistry
+from smallage.litestar import TaskRegistry
 
 registry = TaskRegistry()
 dependencies: dict[str, object] = {}
@@ -24,7 +24,7 @@ no worker, no Redis:
 
 <!-- docs-test: skip -- asserts on the reader's own request handler -->
 ```python
-from litestar_rs import CollectingEnqueuer
+from smallage import CollectingEnqueuer
 
 enqueuer = CollectingEnqueuer()
 registry.bind(dependencies, enqueuer=enqueuer)
@@ -42,7 +42,7 @@ enqueuer.assert_not_enqueued("purge")
 `EagerEnqueuer` runs each task at the moment it is enqueued:
 
 ```python
-from litestar_rs import EagerEnqueuer
+from smallage import EagerEnqueuer
 
 registry.bind(dependencies, enqueuer=EagerEnqueuer(handlers))
 ```
@@ -57,7 +57,7 @@ for the wrong reason.
 
 ```python
 import pytest
-from litestar_rs import worker_running
+from smallage import worker_running
 
 
 @pytest.fixture

@@ -5,8 +5,8 @@ The snippets on this page assume:
 ```python
 from uuid import UUID
 
-from litestar_rs import CollectingEnqueuer
-from litestar_rs.plugin import TaskRegistry
+from smallage import CollectingEnqueuer
+from smallage.litestar import TaskRegistry
 
 registry = TaskRegistry()
 

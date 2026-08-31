@@ -2,8 +2,8 @@
 
 import pytest
 
-from litestar_rs.core.errors import ConfigurationError
-from litestar_rs.core.retry import RetryPolicy
+from smallage.core.errors import ConfigurationError
+from smallage.core.retry import RetryPolicy
 
 pytestmark = pytest.mark.unit
 

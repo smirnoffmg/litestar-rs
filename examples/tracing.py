@@ -15,8 +15,7 @@ from contextvars import ContextVar
 from uuid import UUID, uuid4
 
 from litestar import Litestar, post
-
-from litestar_rs.plugin import (
+from smallage.litestar import (
     QueueConfig,
     QueuePlugin,
     TaskRegistry,

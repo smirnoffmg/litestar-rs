@@ -2,8 +2,8 @@
 
 import pytest
 
-from litestar_rs.core.errors import ConfigurationError
-from litestar_rs.core.keys import (
+from smallage.core.errors import ConfigurationError
+from smallage.core.keys import (
     alive_key,
     dedup_key,
     dlq_key,

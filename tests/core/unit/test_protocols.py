@@ -3,8 +3,8 @@
 import anyio
 import pytest
 
-from litestar_rs.core.envelope import Envelope, JsonCodec
-from litestar_rs.core.protocols import Codec, Sleeper, TaskHandler
+from smallage.core.envelope import Envelope, JsonCodec
+from smallage.core.protocols import Codec, Sleeper, TaskHandler
 
 pytestmark = pytest.mark.unit
 
@@ -23,8 +23,8 @@ def test_implementations_satisfy_their_protocols() -> None:
 def test_transport_satisfies_the_worker_seam() -> None:
     from redis.asyncio import Redis
 
-    from litestar_rs.core.protocols import StreamTransport
-    from litestar_rs.core.transport import RedisStreamsTransport
+    from smallage.core.protocols import StreamTransport
+    from smallage.core.transport import RedisStreamsTransport
 
     transport: StreamTransport = RedisStreamsTransport(
         reader=Redis.from_url("redis://localhost:6379/0", socket_timeout=30.0),

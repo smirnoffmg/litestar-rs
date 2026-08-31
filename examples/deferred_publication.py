@@ -18,9 +18,8 @@ from contextlib import asynccontextmanager
 from uuid import UUID, uuid4
 
 from litestar import Litestar, post
-
-from litestar_rs import DeferredEnqueuer
-from litestar_rs.plugin import QueueConfig, QueuePlugin, TaskRegistry
+from smallage import DeferredEnqueuer
+from smallage.litestar import QueueConfig, QueuePlugin, TaskRegistry
 
 REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
 

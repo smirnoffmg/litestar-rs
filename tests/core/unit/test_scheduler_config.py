@@ -5,8 +5,8 @@ from typing import Any
 import pytest
 from redis.asyncio import Redis
 
-from litestar_rs.core.errors import ConfigurationError
-from litestar_rs.core.scheduler import RedisScheduler
+from smallage.core.errors import ConfigurationError
+from smallage.core.scheduler import RedisScheduler
 
 pytestmark = pytest.mark.unit
 

@@ -10,9 +10,8 @@ import os
 import time
 
 from litestar import Litestar
-
-from litestar_rs import CronJob
-from litestar_rs.plugin import QueueConfig, QueuePlugin, TaskRegistry
+from smallage import CronJob
+from smallage.litestar import QueueConfig, QueuePlugin, TaskRegistry
 
 REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
 

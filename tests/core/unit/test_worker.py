@@ -10,18 +10,18 @@ from collections.abc import Iterable, Sequence
 import anyio
 import pytest
 
-from litestar_rs.core.cron import CronJob
-from litestar_rs.core.envelope import (
+from smallage.core.cron import CronJob
+from smallage.core.envelope import (
     Envelope,
     Pending,
     Record,
     TaskResult,
     to_fields,
 )
-from litestar_rs.core.errors import ConfigurationError
-from litestar_rs.core.retry import RetryPolicy
-from litestar_rs.core.stats import WorkerStats
-from litestar_rs.core.worker import (
+from smallage.core.errors import ConfigurationError
+from smallage.core.retry import RetryPolicy
+from smallage.core.stats import WorkerStats
+from smallage.core.worker import (
     Slots,
     WorkerConfig,
     _consume_loop,

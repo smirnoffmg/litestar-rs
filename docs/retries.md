@@ -18,7 +18,7 @@ being handed to another victim: backing off would only spread the damage.
 ## Backoff
 
 ```python
-from litestar_rs import RetryPolicy, WorkerConfig
+from smallage import RetryPolicy, WorkerConfig
 
 WorkerConfig(retry=RetryPolicy(max_attempts=5, initial_backoff_ms=2_000))
 ```
@@ -52,7 +52,7 @@ The DLQ is a stream at `{ns}:dlq`:
 
 <!-- docs-test: skip -- reads a real dead letter stream -->
 ```python
-from litestar_rs import dlq_key
+from smallage import dlq_key
 
 entries = await client.xrange(dlq_key("lrs"), count=100)
 for entry_id, fields in entries:
@@ -66,7 +66,7 @@ The original payload is untouched, so replaying is re-enqueueing it. Reset
 ```python
 import msgspec.structs
 
-from litestar_rs import from_fields
+from smallage import from_fields
 
 entry_id, fields = entries[0]
 envelope = from_fields(fields)

@@ -14,9 +14,8 @@ import tempfile
 from pathlib import Path
 
 from litestar import Litestar, post
-
-from litestar_rs import FilePayloadStore
-from litestar_rs.plugin import QueueConfig, QueuePlugin, TaskRegistry
+from smallage import FilePayloadStore
+from smallage.litestar import QueueConfig, QueuePlugin, TaskRegistry
 
 REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
 

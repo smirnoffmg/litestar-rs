@@ -5,9 +5,9 @@ from typing import Any
 import pytest
 from redis.asyncio import Redis
 
-from litestar_rs.core.envelope import Envelope
-from litestar_rs.core.errors import ConfigurationError, PayloadTooLarge
-from litestar_rs.core.transport import RedisStreamsTransport
+from smallage.core.envelope import Envelope
+from smallage.core.errors import ConfigurationError, PayloadTooLarge
+from smallage.core.transport import RedisStreamsTransport
 
 pytestmark = pytest.mark.unit
 

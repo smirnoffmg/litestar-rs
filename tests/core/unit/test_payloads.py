@@ -5,8 +5,8 @@ from pathlib import Path
 import anyio
 import pytest
 
-from litestar_rs.core.errors import ConfigurationError
-from litestar_rs.core.payloads import FilePayloadStore, PayloadMissing
+from smallage.core.errors import ConfigurationError
+from smallage.core.payloads import FilePayloadStore, PayloadMissing
 
 pytestmark = pytest.mark.unit
 
@@ -64,7 +64,7 @@ async def test_a_job_id_that_is_not_a_file_name_is_refused(
 
 
 async def test_it_satisfies_the_payload_store_protocol(tmp_path: Path) -> None:
-    from litestar_rs.core.protocols import PayloadStore
+    from smallage.core.protocols import PayloadStore
 
     store: PayloadStore = FilePayloadStore(tmp_path)
 

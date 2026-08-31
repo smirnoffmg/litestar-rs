@@ -5,8 +5,8 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from litestar_rs.core.cron import CronJob, next_fire_ms, occurrence_id
-from litestar_rs.core.errors import ConfigurationError
+from smallage.core.cron import CronJob, next_fire_ms, occurrence_id
+from smallage.core.errors import ConfigurationError
 
 pytestmark = pytest.mark.unit
 
