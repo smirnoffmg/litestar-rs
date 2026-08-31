@@ -13,13 +13,17 @@ from litestar_rs.plugin.registry import TaskRegistry
 from litestar_rs.plugin.tracing import TraceparentSource, no_traceparent
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, kw_only=True)
 class QueueConfig:
     """How this application talks to its queue.
 
     There is deliberately no string path to the app object here. Requiring
     ``"module:app"`` in a constructor pushes an import-time ordering problem onto
     every user; the CLI already has the application it was invoked with.
+
+    Keyword-only: fields are grouped by what they configure rather than appended,
+    so a new one lands mid-class and positional order was never a contract worth
+    keeping.
     """
 
     registry: TaskRegistry

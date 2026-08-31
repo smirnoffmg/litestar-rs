@@ -2,6 +2,7 @@
 lifecycle it puts a worker process through."""
 
 from dataclasses import replace
+from traceback import format_exception
 from types import SimpleNamespace
 from typing import Any
 
@@ -121,7 +122,9 @@ def run_the_worker(app: Litestar, *args: str) -> Result:
 
 
 def opens(events: list[str]) -> list[str]:
-    return [event.removeprefix("open:") for event in events if ":" in event]
+    return [
+        event.removeprefix("open:") for event in events if event.startswith("open:")
+    ]
 
 
 def test_a_worker_runs_the_applications_own_lifecycle(
@@ -159,6 +162,24 @@ def test_the_queue_opens_exactly_once_either_way(
     run_the_worker(app, "--consumer", "w-1")
 
     assert opens(events) == ["w-1"]
+
+
+def test_an_empty_consumer_name_is_refused_rather_than_replaced(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Deriving a name here would turn a typo into a worker under another name."""
+    app, _ = worker_app(monkeypatch)
+
+    result = CliRunner().invoke(
+        workers, ["run", "--consumer", ""], obj=SimpleNamespace(app=app)
+    )
+
+    assert result.exit_code != 0
+    # The traceback, not the exception: entering the lifespan runs the event
+    # emitter's task group, which wraps a startup failure in an ExceptionGroup,
+    # and the traceback is what an operator reads either way.
+    reported = "".join(format_exception(result.exception))
+    assert "consumer must not be empty" in reported
 
 
 def test_without_a_name_each_run_derives_its_own(
