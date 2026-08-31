@@ -37,7 +37,6 @@ def test_defaults_are_accepted() -> None:
     [
         ({"namespace": "a:b"}, "namespace"),
         ({"queues": ["a{b"]}, "queue"),
-        ({"queues": []}, "queues"),
         ({"queues": ["a", "a"]}, "queues"),
         ({"fairness_every": -1}, "fairness_every"),
         ({"shards": 0}, "shards"),
@@ -50,6 +49,27 @@ def test_invalid_values_name_their_field(
 ) -> None:
     with pytest.raises(ConfigurationError, match=expected):
         build(**overrides)
+
+
+def test_a_worker_that_would_read_nothing_is_refused() -> None:
+    """No queues and no foreign streams is an idle process; say so at startup."""
+    with pytest.raises(ConfigurationError, match="read nothing"):
+        build(queues=[])
+
+
+def test_queues_may_be_empty_when_a_foreign_stream_is_named() -> None:
+    """A deployment that only consumes somebody else's streams owns no queue."""
+    transport = build(queues=[], external=["{lrs}:orders"])
+
+    assert transport.streams == []
+    assert transport.external_streams == ("{lrs}:orders",)
+
+
+def test_queues_and_foreign_streams_together_are_accepted() -> None:
+    transport = build(external=["{lrs}:orders"])
+
+    assert transport.streams == ["{lrs}:q:default:0"]
+    assert transport.external_streams == ("{lrs}:orders",)
 
 
 def test_reader_and_control_must_be_separate_clients() -> None:
@@ -154,6 +174,52 @@ async def test_a_non_blocking_sweep_never_passes_block_zero(
     await transport.read(1)
 
     assert [block for _, block in calls[:-1]] == [None, None]
+
+
+async def test_a_queueless_worker_blocks_on_its_foreign_streams(
+    anyio_backend: object, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Without a block this read is a busy loop: it is the only one left."""
+    transport = build(queues=[], external=["{lrs}:orders"], block_ms=5000)
+    calls = spy_reads(transport, monkeypatch)
+
+    await transport.read(4)
+
+    assert calls == [(["{lrs}:orders"], 5000)]
+
+
+async def test_a_worker_with_queues_still_reads_foreign_streams_without_blocking(
+    anyio_backend: object, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Blocking there would wake on the wrong stream and lose queue priority."""
+    transport = build(external=["{lrs}:orders"], block_ms=5000)
+    calls = spy_reads(transport, monkeypatch)
+
+    await transport.read(4)
+
+    assert calls == [
+        (["{lrs}:orders"], None),
+        (["{lrs}:q:default:0"], 5000),
+    ]
+
+
+async def test_a_queueless_worker_trims_nothing(
+    anyio_backend: object, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The trim loop still runs in such a worker; it must be a no-op, not an error."""
+    transport = build(queues=[], external=["{lrs}:orders"])
+
+    async def time() -> tuple[int, int]:
+        return (1, 0)
+
+    async def refuse(*args: object, **kwargs: object) -> object:
+        raise AssertionError("a worker with no queues has nothing to trim")
+
+    monkeypatch.setattr(transport.control, "time", time)
+    monkeypatch.setattr(transport.control, "xpending", refuse)
+    monkeypatch.setattr(transport.control, "xtrim", refuse)
+
+    await transport.trim(retention_ms=1000)
 
 
 async def test_the_low_queue_gets_first_refusal_every_so_often(

@@ -79,8 +79,11 @@ class RedisStreamsTransport:
             )
         if block_ms < 0:
             raise ConfigurationError(f"block_ms must not be negative, got {block_ms}")
-        if not queues:
-            raise ConfigurationError("queues must name at least one queue")
+        if not queues and not external:
+            raise ConfigurationError(
+                "a worker with neither queues nor external streams would read "
+                "nothing; name at least one queue or one external stream"
+            )
         if len(set(queues)) != len(queues):
             raise ConfigurationError(f"queues must not repeat, got {list(queues)}")
         if fairness_every < 0:
@@ -182,6 +185,11 @@ class RedisStreamsTransport:
             # XREADGROUP COUNT 0 is not the same thing as not reading: a fixed
             # COUNT is what skews work between workers (taskiq-redis#91).
             return []
+        if not self.streams:
+            # Nothing of our own to order or to block on, so the foreign read is
+            # the only one left and it is the one that waits. Without the block
+            # this is a busy loop against Redis.
+            return await self._read(self.external_streams, count, self.block_ms)
         if self.external_streams:
             # Read separately: foreign stream names carry no hash tag of ours, so
             # putting them in the same XREADGROUP would break in a cluster.

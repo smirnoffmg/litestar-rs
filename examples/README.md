@@ -8,6 +8,7 @@ Each file is a complete, importable application. They are imported by
 | `basic_app.py`            | a task, its dependencies, and an endpoint that queues it |
 | `cron_jobs.py`            | scheduled work, and what a late run looks like           |
 | `broker_mode.py`          | consuming a stream somebody else writes                  |
+| `broker_only.py`          | the same, in a deployment that owns no queue at all      |
 | `deferred_publication.py` | queueing inside a database transaction                   |
 
 Run any of them as a web application:
