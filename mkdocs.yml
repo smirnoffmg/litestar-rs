@@ -4,6 +4,8 @@ site_url: https://smirnoffmg.dev/smallage/
 
 theme:
   name: material
+  logo: assets/logo.png
+  favicon: assets/logo.png
   features:
     - content.code.copy
     - navigation.instant

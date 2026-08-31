@@ -1,3 +1,8 @@
+<p align="center">
+  <img src="https://raw.githubusercontent.com/smirnoffmg/smallage/main/docs/assets/logo.png"
+       alt="smallage — wild celery (Apium graveolens)" width="180">
+</p>
+
 # smallage
 
 [![PyPI version](https://img.shields.io/pypi/v/smallage)](https://pypi.org/project/smallage/)
