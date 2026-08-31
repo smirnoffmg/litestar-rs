@@ -116,7 +116,7 @@ any form.
 `type_encoders` Litestar uses. Task signatures are settled by the same machinery
 as handlers; incompatible arguments are caught at registration, not in a worker.
 
-**CLI through `CLIPluginProtocol`.** One entrypoint:
+**CLI through `CLIPlugin`.** One entrypoint:
 `litestar workers run --queue high --concurrency 20`. A string path to the
 application (`"module:app"`) as a required init parameter is an anti-pattern;
 do not repeat it.
@@ -133,10 +133,11 @@ produces — a blocking `XREADGROUP` does not return an error straight away. It 
 tested twice: with `CLIENT KILL` against a standalone server, and with a real
 `SENTINEL FAILOVER` under an in-flight job.
 
-**Health.** The plugin serves an endpoint with consumer group state and lag, and
-the worker serves the same route from the same function
-(`litestar workers run --health-port 8081`), so readiness probes for the web and
-worker deployments ask an identical question.
+**Health.** `QueuePlugin.health()` reports consumer group state and lag. The
+plugin serves it nowhere and starts no server: which path a probe lives on, and
+whether a worker deployment has an HTTP probe at all, is the deployment's
+decision. Both deployments get the answer from the same function, so their
+readiness probes ask an identical question.
 
 ## Execution contracts
 

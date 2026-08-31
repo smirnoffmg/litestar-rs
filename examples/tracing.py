@@ -61,7 +61,7 @@ plugin = QueuePlugin(
 @post("/documents")
 async def create() -> dict[str, str]:
     # Your tracing middleware sets this; here it is faked so the example runs.
-    traceparent = f"00-{uuid4().hex}{uuid4().hex[:0]}-{uuid4().hex[:16]}-01"
+    traceparent = f"00-{uuid4().hex}-{uuid4().hex[:16]}-01"
     REQUEST_TRACEPARENT.set(traceparent)
 
     doc_id = uuid4()
