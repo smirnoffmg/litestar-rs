@@ -86,6 +86,11 @@ A worker is the same application, started differently:
 litestar workers run --queue high --concurrency 20 --health-port 8081
 ```
 
+The lifecycle comes with it: a worker enters the application's lifespan, so
+`on_startup` hooks and lifespan managers run there too and a dependency closing
+over what they opened is usable in a task. `run_app_lifespan=False` declines
+that, for a lifespan whose work belongs to a web process alone.
+
 Anything that can be settled at startup is — a task registered twice, an
 argument with no annotation, a dependency the application does not provide, a
 cycle, a provider only a request could satisfy — rather than on the first job in

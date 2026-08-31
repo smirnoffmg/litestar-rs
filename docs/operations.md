@@ -16,6 +16,28 @@ entries by consumer name, and reclaim uses that name to tell its own work from a
 peer's. The default appends a random suffix to `consumer_prefix`; if you set the
 name yourself, keep it unique per process.
 
+### What starts with it
+
+The same application means the same lifecycle. A worker enters
+`Litestar.lifespan()` before it consumes anything and leaves it after draining,
+so `on_startup` hooks, `on_shutdown` hooks and custom lifespan managers all run
+in a worker process. A dependency that closes over something opened there — a
+database pool, an HTTP client, a broker connection — resolves to an opened one,
+and a failure to open it surfaces at startup rather than on the first job.
+
+That happens in every worker replica. When the lifespan does work that belongs
+to a web process — starting a scheduler, warming a cache, claiming a lease — the
+application says so:
+
+```python
+from litestar_rs.plugin import QueueConfig, TaskRegistry
+
+QueueConfig(registry=TaskRegistry(), run_app_lifespan=False)
+```
+
+A worker that declines opens the queue's own connections and nothing else, and
+runs none of the application's hooks.
+
 ## Connections
 
 Each worker opens two clients. A blocking `XREADGROUP` occupies its connection

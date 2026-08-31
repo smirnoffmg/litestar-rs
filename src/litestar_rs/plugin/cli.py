@@ -54,13 +54,19 @@ async def serve_health(plugin: QueuePlugin, host: str, port: int) -> None:
 
 
 def with_overrides(
-    config: QueueConfig, *, queues: tuple[str, ...], concurrency: int | None
+    config: QueueConfig,
+    *,
+    queues: tuple[str, ...],
+    concurrency: int | None,
+    consumer: str | None,
 ) -> QueueConfig:
     """Apply command line overrides to the application's own configuration."""
     if queues:
         config = replace(config, queues=queues)
     if concurrency is not None:
         config = replace(config, worker=replace(config.worker, concurrency=concurrency))
+    if consumer is not None:
+        config = replace(config, consumer=consumer)
     return config
 
 
@@ -101,14 +107,17 @@ def run_workers(
     """Consume tasks until interrupted."""
     app: Litestar = env.app  # type: ignore[attr-defined]  # LitestarEnv carries it
     plugin = plugin_of(app)
-    config = with_overrides(plugin.config, queues=queues, concurrency=concurrency)
+    config = with_overrides(
+        plugin.config, queues=queues, concurrency=concurrency, consumer=consumer
+    )
     plugin.config = config
 
     async def main() -> None:
-        async with (
-            plugin.connected(consumer=consumer),
-            anyio.create_task_group() as tg,
-        ):
+        # Exactly one of the two, never both: the application's lifespan opens
+        # the queue through the plugin, so entering it and connecting as well
+        # would leave a worker holding two sets of connections.
+        opened = app.lifespan() if config.run_app_lifespan else plugin.connected()
+        async with opened, anyio.create_task_group() as tg:
             if health_port is not None:
                 tg.start_soon(partial(serve_health, plugin, health_host, health_port))
             await run_with_signals(

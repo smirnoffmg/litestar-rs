@@ -29,8 +29,25 @@ class QueueConfig:
     shards: int = 1
     group: str = "workers"
     consumer_prefix: str = "worker"
+    consumer: str | None = None
+    """The worker's consumer name, or None to derive one from `consumer_prefix`.
+
+    Must be unique per running worker: Redis groups pending entries by consumer
+    name, and reclaim uses that name to tell a worker's own work from a peer's.
+    `--consumer` sets this, which is how the name survives being settled before
+    the application's lifespan opens the queue.
+    """
     block_ms: int = 5_000
     worker: WorkerConfig = field(default_factory=WorkerConfig)
+    run_app_lifespan: bool = True
+    """Whether a worker process enters the application's lifespan.
+
+    On by default, so a dependency that closes over something the lifespan opens
+    resolves to an opened one in a worker as well as in a web process. Decline it
+    when the lifespan does work that belongs to a web process -- starting a
+    scheduler, warming a cache, claiming a lease -- which would otherwise happen
+    in every worker replica.
+    """
     cron: Sequence[CronJob] = ()
     health_path: str | None = "/health/queue"
     """Where the plugin serves queue health, or None to register no route.
