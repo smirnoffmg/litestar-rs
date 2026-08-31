@@ -111,6 +111,10 @@ class QueuePlugin(InitPlugin, CLIPlugin):
 
         Used by the application lifespan and by the worker command alike, so a
         worker and a web process reach Redis in exactly the same shape.
+
+        The consumer name comes from `config.consumer` unless a caller using the
+        core directly passes one: a worker that enters the application's lifespan
+        never opens the queue itself, so it has nowhere to pass an argument.
         """
         config = self.config
         # The reader owns its connection for a whole block window; a socket
@@ -124,7 +128,9 @@ class QueuePlugin(InitPlugin, CLIPlugin):
             self._transport = RedisStreamsTransport(
                 reader=reader,
                 control=control,
-                consumer=consumer or f"{config.consumer_prefix}-{uuid4().hex[:8]}",
+                consumer=consumer
+                or config.consumer
+                or f"{config.consumer_prefix}-{uuid4().hex[:8]}",
                 namespace=config.namespace,
                 queues=config.queues,
                 shards=config.shards,

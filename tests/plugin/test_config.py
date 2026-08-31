@@ -20,6 +20,29 @@ def test_a_health_path_without_a_leading_slash_is_refused() -> None:
         QueueConfig(registry=TaskRegistry(), health_path="queue")
 
 
+def test_a_worker_runs_the_application_lifespan_unless_told_otherwise() -> None:
+    """The opt-out is a property of the application, so it lives in the config."""
+    assert QueueConfig(registry=TaskRegistry()).run_app_lifespan is True
+    assert (
+        QueueConfig(registry=TaskRegistry(), run_app_lifespan=False).run_app_lifespan
+        is False
+    )
+
+
+def test_the_consumer_name_defaults_to_being_derived() -> None:
+    """`consumer_prefix` plus a suffix, unless the deployment names the worker."""
+    assert QueueConfig(registry=TaskRegistry()).consumer is None
+    assert QueueConfig(registry=TaskRegistry(), consumer="w-1").consumer == "w-1"
+
+
+def test_an_application_may_own_no_queues() -> None:
+    """A pure broker deployment otherwise names a queue nobody writes to; the
+    transport is what refuses a worker that would read nothing."""
+    config = QueueConfig(registry=TaskRegistry(), queues=())
+
+    assert config.queues == ()
+
+
 def test_health_says_unhealthy_when_redis_cannot_report_lag() -> None:
     """A missing depth reading is not a zero-depth queue."""
     reported = QueueHealth(

@@ -1,6 +1,10 @@
 """The plugin end to end: declare a task, post a request, run it in a worker."""
 
+import os
+import signal
+import sys
 from collections.abc import AsyncIterator
+from pathlib import Path
 from uuid import UUID, uuid4
 
 import anyio
@@ -10,7 +14,7 @@ from litestar.di import Provide
 from litestar.testing import AsyncTestClient
 from redis.asyncio import Redis
 
-from litestar_rs import Record
+from litestar_rs import Envelope, Record, RedisStreamsTransport
 from litestar_rs.core.errors import ConfigurationError
 from litestar_rs.core.keys import stream_key
 from litestar_rs.core.testing import worker_running
@@ -66,6 +70,79 @@ def make_app(redis_url: str, namespace: str) -> tuple[Litestar, QueuePlugin]:
 
 
 DOC_ID = uuid4()
+
+ROOT = Path(__file__).resolve().parents[2]
+WORKER_APP = "tests.plugin._worker_main:app"
+
+
+@pytest.mark.slow
+async def test_a_worker_process_runs_the_applications_own_lifecycle(
+    redis_url: str, namespace: str
+) -> None:
+    """The worker command against a real application, in a process of its own.
+
+    `app.lifespan()` is entered outside any ASGI server here, and the task's
+    `ledger` dependency resolves to something usable only if the startup hook
+    really ran -- which is the failure a fake cannot reproduce. The order of the
+    signals is the assertion: opened, handled, and only then shut down.
+    """
+    signal_key = f"{{{namespace}}}:signal"
+    reader: Redis = Redis.from_url(redis_url, socket_timeout=30.0)
+    control: Redis = Redis.from_url(redis_url)
+
+    async def signalled() -> bytes:
+        taken = await control.blpop([signal_key], timeout=60)
+        assert taken is not None, "the worker went quiet"
+        value = taken[1]
+        assert isinstance(value, bytes)
+        return value
+
+    try:
+        seed = RedisStreamsTransport(
+            reader=reader, control=control, consumer="seed", namespace=namespace
+        )
+        await seed.ensure_group()
+        await seed.enqueue(
+            Envelope(
+                id="job-1",
+                task="record",
+                payload=b'{"note":"n1"}',
+                enqueued_at=1712345678901,
+            ),
+            queue="default",
+        )
+
+        worker = await anyio.open_process(
+            [
+                sys.executable,
+                "-m",
+                "litestar",
+                "--app",
+                WORKER_APP,
+                "workers",
+                "run",
+                "--consumer",
+                "w-1",
+            ],
+            cwd=str(ROOT),
+            env={
+                **os.environ,
+                "LRS_TEST_REDIS_URL": redis_url,
+                "LRS_TEST_NAMESPACE": namespace,
+                "LRS_TEST_SIGNAL": signal_key,
+            },
+        )
+        with anyio.fail_after(120):
+            assert await signalled() == b"startup"
+            assert await signalled() == b"handled:n1"
+            worker.send_signal(signal.SIGTERM)
+            await worker.wait()
+            assert await signalled() == b"shutdown"
+
+        assert worker.returncode == 0
+    finally:
+        await reader.aclose()
+        await control.aclose()
 
 
 async def test_a_request_puts_a_job_on_the_stream(
