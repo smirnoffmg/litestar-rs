@@ -81,22 +81,42 @@ connection hung by a failover.
 
 ## Health
 
-The plugin serves `QueueConfig.health_path` (`/health/queue` by default). If the
-application already uses that path, startup fails with the clash named rather
-than one handler shadowing the other — move it, or set `health_path=None` and
-serve the same data yourself:
+`QueuePlugin.health()` answers everything a readiness probe needs. The plugin
+registers no route for it: where a probe lives, whether it is public, and what
+else belongs in the same response are the application's to decide, and it would
+be an odd plugin that could fail your startup over a path it added itself.
 
 ```python
-from litestar import get
+from litestar import Litestar, Response, get
 
-from litestar_rs.plugin import QueuePlugin, queue_health
+from litestar_rs.plugin import QueueConfig, QueueHealth, QueuePlugin, TaskRegistry
+
+queue = QueuePlugin(QueueConfig(registry=TaskRegistry()))
 
 
-@get("/healthz")
-async def healthz(plugin: QueuePlugin) -> dict[str, object]:
-    queue = await queue_health(plugin.transport, plugin.stats)
-    return {"queue": queue, "database": ...}
+@get("/health/queue")
+async def health() -> Response[QueueHealth]:
+    report = await queue.health()
+    # A probe reads the status code, not the body. Answering 200 while unhealthy
+    # is a probe that can never fail.
+    return Response(report, status_code=200 if report.healthy else 503)
+
+
+app = Litestar(route_handlers=[health], plugins=[queue])
 ```
+
+The handler closes over the plugin rather than taking it as an argument: the
+plugin registers no dependency of its own, so a `plugin: QueuePlugin` parameter
+would be read as a query parameter and the request answered with a 400. Folding
+the queue into a health endpoint the application already has works the same way
+— `await queue.health()` beside whatever else that endpoint reports.
+
+**A worker serves nothing.** It has no server, and this library does not start
+one: an HTTP probe against a worker deployment is that deployment's own decision
+— which port, which interface, behind what — and `health()` is the whole of what
+it needs from here, computed exactly as it is for a web process. Liveness has an
+answer that needs no HTTP at all: a worker refreshes a key per entry it holds,
+and a peer reclaims what stops being refreshed — see [Retries](retries.md).
 
 The response:
 

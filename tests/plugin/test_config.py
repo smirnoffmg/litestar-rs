@@ -15,11 +15,6 @@ def test_an_empty_redis_url_is_refused() -> None:
         QueueConfig(registry=TaskRegistry(), redis_url="")
 
 
-def test_a_health_path_without_a_leading_slash_is_refused() -> None:
-    with pytest.raises(ConfigurationError, match="health_path"):
-        QueueConfig(registry=TaskRegistry(), health_path="queue")
-
-
 def test_a_worker_runs_the_application_lifespan_unless_told_otherwise() -> None:
     """The opt-out is a property of the application, so it lives in the config."""
     assert QueueConfig(registry=TaskRegistry()).run_app_lifespan is True
@@ -72,13 +67,6 @@ def test_healthy_reaches_the_wire() -> None:
     )
 
     assert b'"healthy":false' in body
-
-
-def test_the_health_route_can_be_turned_off() -> None:
-    """An application with its own health endpoint should not be forced a second."""
-    config = QueueConfig(registry=TaskRegistry(), health_path=None)
-
-    assert config.health_path is None
 
 
 def test_every_transport_setting_is_reachable_from_the_configuration() -> None:

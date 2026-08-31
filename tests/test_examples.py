@@ -20,6 +20,7 @@ EXAMPLES = [
     "examples.cron_jobs",
     "examples.broker_mode",
     "examples.broker_only",
+    "examples.health_endpoint",
     "examples.deferred_publication",
     "examples.results",
     "examples.retries_and_dlq",
@@ -82,6 +83,25 @@ def test_the_broker_only_example_owns_no_queue() -> None:
 
     assert plugin.config.queues == ()
     assert plugin.config.external == (broker_only.PAYMENTS,)
+
+
+def test_the_health_example_serves_routes_of_its_own() -> None:
+    """The plugin adds none, so every route here is one the example wrote.
+
+    That the handlers actually answer is asserted against a real Redis, in
+    `tests/plugin/test_plugin.py` -- this file has none.
+    """
+    from examples import health_endpoint
+
+    app = health_endpoint.app
+    plugin = next(p for p in app.plugins if isinstance(p, QueuePlugin))
+    bare = Litestar(route_handlers=[], plugins=[plugin])
+    served = {route.path for route in app.routes}
+
+    assert served - {route.path for route in bare.routes} == {
+        "/health/queue",
+        "/readyz",
+    }
 
 
 def test_the_core_example_reaches_for_no_web_framework() -> None:

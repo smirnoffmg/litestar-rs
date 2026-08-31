@@ -1,7 +1,8 @@
-"""Queue health, served identically by the web app and by the worker.
+"""One answer to "is the queue all right", wherever it is asked from.
 
-Readiness probes for the two deployments then ask the same question and get the
-answer computed the same way, which is the only way they stay comparable.
+The plugin's route, `QueuePlugin.health()` and anything built on the core
+directly all come through here, so probes against a web process and against a
+worker stay comparable instead of drifting into two lookalike answers.
 """
 
 from __future__ import annotations
