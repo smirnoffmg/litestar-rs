@@ -313,6 +313,27 @@ class RedisStreamsTransport:
         )
         return parse_xclaim_reply(stream, list(reply))
 
+    async def sweep_consumers(self, *, min_idle_ms: int) -> int:
+        """Remove consumers that hold nothing and have gone quiet.
+
+        A name is derived per process start, so every deploy leaves one behind
+        and Redis expires none of them. Deleting one that still owns pending
+        entries would make them unclaimable, so the script checks and deletes in
+        one step rather than trusting a reading taken a round trip earlier.
+
+        Deleting a live worker's idle consumer costs nothing -- Redis recreates
+        it on the next read -- which is why the only hard condition is that it
+        holds nothing.
+        """
+        deleted = 0
+        for stream in (*self.streams, *self.external_streams):
+            deleted += int(
+                await self._scripts.sweep_consumers(
+                    keys=[stream], args=[self.group, min_idle_ms]
+                )
+            )
+        return deleted
+
     async def trim(self, *, retention_ms: int) -> None:
         """Trim by time, floored at the oldest unacked entry.
 

@@ -9,7 +9,14 @@ from redis.commands.core import AsyncScript
 
 from smallage.core.envelope import Record
 
-SCRIPT_NAMES = ("ack", "reclaim", "promote", "renew_leader", "release_leader")
+SCRIPT_NAMES = (
+    "ack",
+    "reclaim",
+    "sweep_consumers",
+    "promote",
+    "renew_leader",
+    "release_leader",
+)
 
 
 def load_script(name: str) -> str:
@@ -20,6 +27,7 @@ def load_script(name: str) -> str:
 class TransportScripts:
     ack: AsyncScript
     reclaim: AsyncScript
+    sweep_consumers: AsyncScript
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,6 +41,7 @@ def register_transport(client: Redis) -> TransportScripts:
     return TransportScripts(
         ack=client.register_script(load_script("ack")),
         reclaim=client.register_script(load_script("reclaim")),
+        sweep_consumers=client.register_script(load_script("sweep_consumers")),
     )
 
 

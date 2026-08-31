@@ -49,6 +49,12 @@ leaves the record in the stream and the stream leaks. A background `XTRIM MINID`
 by time runs alongside. `MAXLEN ~` is not used: trimming by length can discard
 unacknowledged work.
 
+**A consumer name outlives the process that made it.** Redis registers one on
+first read and expires none, so the trim loop deletes those holding nothing and
+idle beyond `consumer_idle_ms`. The condition is emptiness rather than idleness:
+deleting a consumer makes its pending entries unclaimable, so check and delete
+are one script and a consumer owning work is never removed at any age.
+
 **Liveness is separate from min-idle-time.** `XAUTOCLAIM` cannot tell a dead
 worker from a live one running a long task. A worker holds
 `SET {ns}:alive:<entry> PX ttl` and refreshes it from the worker supervisor, not

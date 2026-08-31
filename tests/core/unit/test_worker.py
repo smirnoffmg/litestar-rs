@@ -137,6 +137,7 @@ class FakeTransport:
         self.cleared: list[list[bytes]] = []
         self.acked: list[tuple[str, list[bytes]]] = []
         self.trimmed = 0
+        self.swept = 0
         self.buried: list[tuple[bytes, str, str]] = []
         self.dedup_claims: list[str] = []
         self.dedup_taken: set[str] = set()
@@ -204,6 +205,10 @@ class FakeTransport:
 
     async def trim(self, *, retention_ms: int) -> None:
         self.trimmed += 1
+
+    async def sweep_consumers(self, *, min_idle_ms: int) -> int:
+        self.swept += 1
+        return 0
 
 
 @pytest.mark.parametrize(
@@ -1105,6 +1110,9 @@ class UnreachableTransport(FakeTransport):
 
     async def trim(self, *, retention_ms: int) -> None:
         raise ConnectionError("connection closed by server")
+
+    async def sweep_consumers(self, *, min_idle_ms: int) -> int:
+        return 0
 
     async def pending(self, *, count: int, min_idle_ms: int) -> list[Pending]:
         raise ConnectionError("connection closed by server")
