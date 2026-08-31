@@ -50,16 +50,46 @@ directly, they go to `run(...)` or `run_with_signals(...)` as `brokers=`.
 - **No re-enqueue on failure.** The stream is not yours to write to, so a failing
   handler simply does not ack. Redelivery is the retry, and the delivery ceiling
   is what eventually moves a poisonous entry to the dead letter queue.
-- **A separate read, and a latency floor with it.** Foreign stream names carry
-  none of your hash tag, so they are read in their own `XREADGROUP`. Joining
-  them to yours would break the moment anyone runs this on a cluster — but it
-  also means a foreign stream is only looked at between blocking reads of your
-  own queues, so an entry waits up to `block_ms` before it is seen. The default
-  is five seconds. Lower `block_ms` if broker latency matters; it costs more
-  round trips while the queues are idle.
+- **A separate read, and — in a worker that owns queues — a latency floor with
+  it.** Foreign stream names carry none of your hash tag, so they are read in
+  their own `XREADGROUP`. Joining them to yours would break the moment anyone
+  runs this on a cluster. Where you have queues of your own, that separate read
+  is a non-blocking one: `XREADGROUP` with `BLOCK` wakes on whichever stream has
+  something and so cannot express priority between your queues. A foreign entry
+  therefore waits up to `block_ms` before it is seen, five seconds by default.
+  Lower `block_ms` if broker latency matters; it costs more round trips while
+  the queues are idle. A worker with no queues of its own pays none of this —
+  see below.
 - **The group still applies.** `ensure_group` creates the consumer group on
   external streams too, so reclaim, liveness and the delivery ceiling work there
   exactly as they do on your own.
+
+## A worker that owns no queues
+
+A deployment that only consumes streams somebody else writes names no queue at
+all:
+
+```python
+QueueConfig(registry=tasks, queues=(), brokers={"{lrs}:orders": on_order})
+```
+
+Nothing is created in your namespace: no queue stream, no consumer group on one,
+and nothing for the trim loop to visit. Such a deployment previously had to
+declare a queue nobody wrote to, and the stream and group it left behind were
+indistinguishable, to anyone reading the keyspace later, from ones something was
+meant to be writing to.
+
+There is no latency floor here either. With no queues of its own there is no
+priority to protect, so the read of the foreign streams is the blocking one and
+an entry is picked up as it is written.
+
+A worker with neither queues nor broker streams is refused when it is built: it
+would read nothing, and saying so at startup beats a silent idle process.
+
+**Enqueueing still works.** `queues=()` says what this deployment *reads*. A
+task enqueued from it goes onto its queue exactly as before, for whichever
+deployment consumes that queue. That split across deployments is a legitimate
+topology and is deliberately not refused.
 
 ## Naming
 

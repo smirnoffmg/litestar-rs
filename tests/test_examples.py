@@ -19,6 +19,7 @@ EXAMPLES = [
     "examples.basic_app",
     "examples.cron_jobs",
     "examples.broker_mode",
+    "examples.broker_only",
     "examples.deferred_publication",
     "examples.results",
     "examples.retries_and_dlq",
@@ -71,6 +72,16 @@ def test_the_broker_example_subscribes_to_what_it_handles() -> None:
 
     assert set(plugin.config.brokers) == {broker_mode.ORDERS}
     assert plugin.config.external == (broker_mode.ORDERS,)
+
+
+def test_the_broker_only_example_owns_no_queue() -> None:
+    """The whole point of it: a deployment that reads nothing of its own."""
+    from examples import broker_only
+
+    plugin = next(p for p in broker_only.app.plugins if isinstance(p, QueuePlugin))
+
+    assert plugin.config.queues == ()
+    assert plugin.config.external == (broker_only.PAYMENTS,)
 
 
 def test_the_core_example_reaches_for_no_web_framework() -> None:
