@@ -78,6 +78,7 @@ litestar workers run --queue high --concurrency 20
 ## Guides
 
 - [Design and invariants](design.md) — the rules, and why each is a rule
+- [How this differs](comparison.md) — against Celery, taskiq-redis and dramatiq
 - [Tasks](tasks.md) — arguments, dependencies, what travels and what is injected
 - [Scheduling](scheduling.md) — delayed jobs, cron, missed occurrences
 - [Retries and the DLQ](retries.md) — the two counters, backoff, reading a buried job
