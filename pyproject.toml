@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "litestar-rs"
-version = "0.1.4"
+version = "0.2.0"
 description = "Distributed task queue on Redis Streams with first-class Litestar integration"
 readme = "README.md"
 requires-python = ">=3.13"
