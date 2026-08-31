@@ -189,6 +189,27 @@ Acking deletes the entry, so a healthy stream stays near empty. A background
 oldest unacknowledged entry — `MINID` has the same hazard as `MAXLEN` once
 pending work falls outside the retention window.
 
+## Consumer names
+
+The group grows too, and for a longer-lived reason: a worker registers its
+consumer name on its first read, a name is derived per process start, and Redis
+expires none of them. Four replicas across a year of daily deploys would leave
+some fifteen hundred dead names in the group — enough to make `XINFO CONSUMERS`
+useless exactly when an operator reaches for it.
+
+The same loop that trims sweeps them: a consumer holding no pending entries and
+idle longer than `consumer_idle_ms` — an hour by default — is removed. A live
+worker touches the group at least every `block_ms`, so an hour is far above
+anything a running process produces, and deleting one early would be harmless
+anyway because Redis recreates it on the next read.
+
+**Holding nothing is the hard condition, not idleness.** Redis makes the pending
+entries of a deleted consumer unclaimable, so a consumer that still owns work is
+never touched however long it has been quiet — that is where reclaim goes
+looking for a dead worker's orphans. The check and the deletion are one Lua
+script rather than two commands, because between them a live worker could take
+an entry and the sweep would destroy it.
+
 ## Redis topologies
 
 Standalone, Sentinel and Cluster are all covered by the test suite. Cluster is

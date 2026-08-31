@@ -44,6 +44,14 @@ class WorkerConfig:
     reclaim_interval_s: float = 5.0
     trim_interval_s: float = 60.0
     retention_ms: int = 24 * 60 * 60 * 1000
+    consumer_idle_ms: int = 60 * 60 * 1000
+    """How long a consumer may hold nothing and say nothing before it is presumed
+    gone and removed from the group.
+
+    A live worker touches the group at least every `block_ms`, so an hour is far
+    above anything a running process produces. Deleting one early is harmless --
+    Redis recreates it on the next read -- so the generous default costs nothing
+    but a slower cleanup."""
     drain_timeout_s: float = 30.0
     retry: RetryPolicy = field(default_factory=RetryPolicy)
     dedup_ttl_ms: int = 24 * 60 * 60 * 1000
@@ -611,6 +619,10 @@ async def _trim_loop(
     while True:
         try:
             await transport.trim(retention_ms=cfg.retention_ms)
+            # Housekeeping over shared state, on the same interval: a consumer
+            # name is left behind by every process that ever started, and Redis
+            # expires none of them.
+            await transport.sweep_consumers(min_idle_ms=cfg.consumer_idle_ms)
         except Exception:
             logger.exception("trim failed, retrying")
             await sleep(cfg.recovery_interval_s)
