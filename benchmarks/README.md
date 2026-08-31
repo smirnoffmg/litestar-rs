@@ -62,6 +62,43 @@ queue cannot block on a single read, so it sweeps high to low without blocking
 and only blocks when everything is empty; that costs about half a millisecond at
 the median and two at p95, and buys ordering between kinds of work.
 
+### Why the drain figures come out where they do
+
+Commands issued during the drain phase alone, 1 500 jobs, from
+`INFO commandstats` snapshotted between the fill and the drain:
+
+| | commands per job |
+| --- | ---: |
+| smallage | 5.21 |
+| saq | 10.04 |
+
+The count is the smaller half of the story. What matters is how many *round
+trips* those commands cost.
+
+smallage spends `evalsha` 1.00, `set` 1.00, and `xreadgroup` 0.20 per job. The
+`xack`, `xdel` and `del` that also appear at 1.00 each run **inside** that one
+`evalsha` — acking, deleting the entry and dropping the liveness key are a single
+Lua script over `[stream, *alive_keys]`, so three commands cost one trip. And one
+`XREADGROUP` returns about five jobs. Timing each transport call bears this out:
+400 jobs took 82 reads, 81 `mark_alive` calls and 400 acks — roughly 1.4 round
+trips per job.
+
+saq cannot amortise the read the same way: `BLMOVE` and `RPOPLPUSH` return one
+job per trip, and there is nothing to batch. Around it go `get`, `setex`, `lrem`,
+`zrem`, `set`, a `MULTI`/`EXEC` pair, and two `PUBLISH` per job.
+
+Those extra commands are not waste. The two `PUBLISH` are the notification that
+lets saq avoid polling, which is where its own sub-5ms latency claim comes from.
+The `setex`, `zrem` and status writes maintain per-job state — status, result,
+the `incomplete` set — and that state is what a web interface and job abort are
+built on. This library keeps almost nothing beyond the stream entry, which is why
+it has neither.
+
+So the gap is a consequence of the primitive rather than of care taken: a
+consumer group reads in batches and acknowledges in one script, a list hands over
+one element at a time. The same choice is what costs this library the features
+saq has.
+
 ### How this benchmark lied the first time
 
 The first version of these numbers had this library draining at 100–370 jobs/s,
