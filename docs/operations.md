@@ -25,9 +25,39 @@ in a worker process. A dependency that closes over something opened there — a
 database pool, an HTTP client, a broker connection — resolves to an opened one,
 and a failure to open it surfaces at startup rather than on the first job.
 
-That happens in every worker replica. When the lifespan does work that belongs
-to a web process — starting a scheduler, warming a cache, claiming a lease — the
-application says so:
+The queue is the outermost of those managers, so a manager the application
+registers has it open on the way in and on the way out — it can enqueue at
+startup and drain on shutdown. `on_shutdown` hooks are the exception: Litestar
+puts them on its exit stack before any context manager, so they run last, after
+the queue has closed, and a hook that reaches for `plugin.transport` there is
+told so. Shutdown work that needs the queue belongs in a lifespan manager.
+
+### Declining it
+
+Entering the lifespan happens in every worker replica, and part of a lifespan is
+often meant for one process only — starting a scheduler, warming a cache,
+claiming a lease. Guard that part where it is written; the rest of the lifespan,
+the pool a task needs among it, still has to run:
+
+```python
+import os
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
+
+from litestar import Litestar
+
+
+@asynccontextmanager
+async def run_the_scheduler(app: Litestar) -> AsyncGenerator[None]:
+    if os.environ.get("ROLE") != "web":
+        yield
+        return
+    async with scheduler:
+        yield
+```
+
+`run_app_lifespan=False` is the blunter instrument, for a lifespan that is
+web-only in its entirety:
 
 ```python
 from litestar_rs.plugin import QueueConfig, TaskRegistry
@@ -36,7 +66,8 @@ QueueConfig(registry=TaskRegistry(), run_app_lifespan=False)
 ```
 
 A worker that declines opens the queue's own connections and nothing else, and
-runs none of the application's hooks.
+runs none of the application's hooks — including the ones its tasks depend on,
+which is why it is the second answer and not the first.
 
 ## Connections
 

@@ -90,7 +90,10 @@ class QueuePlugin(InitPlugin, CLIPlugin):
             thread_limit=self.config.thread_limit,
             offload_over_bytes=self.config.offload_over_bytes,
         )
-        app_config.lifespan.append(self._lifespan)
+        # First, so the queue is the outermost manager: everything the
+        # application opens after it can enqueue, and can still enqueue while
+        # unwinding. Appended, it would close before their exits ran.
+        app_config.lifespan.insert(0, self._lifespan)
         if self.config.health_path is not None:
             app_config.route_handlers.append(self._health_route())
         return app_config
@@ -112,9 +115,9 @@ class QueuePlugin(InitPlugin, CLIPlugin):
         Used by the application lifespan and by the worker command alike, so a
         worker and a web process reach Redis in exactly the same shape.
 
-        The consumer name comes from `config.consumer` unless a caller using the
-        core directly passes one: a worker that enters the application's lifespan
-        never opens the queue itself, so it has nowhere to pass an argument.
+        The consumer name comes from `config.consumer` unless a caller opening
+        the queue itself passes one: a worker that enters the application's
+        lifespan never opens the queue, so it has nowhere to pass an argument.
         """
         config = self.config
         # The reader owns its connection for a whole block window; a socket
@@ -128,9 +131,7 @@ class QueuePlugin(InitPlugin, CLIPlugin):
             self._transport = RedisStreamsTransport(
                 reader=reader,
                 control=control,
-                consumer=consumer
-                or config.consumer
-                or f"{config.consumer_prefix}-{uuid4().hex[:8]}",
+                consumer=_consumer_name(config, consumer),
                 namespace=config.namespace,
                 queues=config.queues,
                 shards=config.shards,
@@ -188,6 +189,17 @@ class QueuePlugin(InitPlugin, CLIPlugin):
             )
 
         return health
+
+
+def _consumer_name(config: QueueConfig, override: str | None) -> str:
+    """A name given as empty is passed through rather than replaced: the
+    transport refuses it, and quietly generating one instead would turn a typo in
+    `--consumer` into a second worker under an unrelated name.
+    """
+    named = override if override is not None else config.consumer
+    if named is None:
+        return f"{config.consumer_prefix}-{uuid4().hex[:8]}"
+    return named
 
 
 def _providers(dependencies: dict[str, Any]) -> dict[str, Provide]:
